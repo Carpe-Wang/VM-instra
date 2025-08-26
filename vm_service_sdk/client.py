@@ -10,6 +10,15 @@ from typing import Optional, Dict, Any, List, AsyncContextManager
 from datetime import datetime
 import uuid
 
+# 环境变量加载
+try:
+    from dotenv import load_dotenv
+    # 加载 .env 文件
+    load_dotenv()
+except ImportError:
+    # 如果没有安装 python-dotenv，忽略
+    pass
+
 # E2B Desktop 导入
 from e2b_desktop import Sandbox as E2BSandbox
 
