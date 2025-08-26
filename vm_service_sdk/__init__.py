@@ -5,27 +5,59 @@ VM Service SDK
 
 from .client import VMServiceClient
 from .models import (
+    SandboxStatus,
     SandboxConfig, 
     SandboxInfo, 
     ExecutionResult,
-    StreamConfig
+    StreamConfig,
+    ProcessInfo,
+    EnvironmentInfo,
+    SystemHealth,
+    ConnectionInfo,
+    FileInfo
 )
 from .exceptions import (
     VMServiceError,
     SandboxCreationError,
     SandboxNotFoundError,
-    AuthenticationError
+    AuthenticationError,
+    QuotaExceededError,
+    FileOperationError,
+    ApplicationError,
+    StreamError,
+    ProcessError,
+    EnvironmentError,
+    ConnectionError,
+    ResourceLimitError,
+    HealthCheckError
 )
 
 __version__ = "1.0.0"
 __all__ = [
     "VMServiceClient",
+    # Models
+    "SandboxStatus",
     "SandboxConfig", 
     "SandboxInfo",
     "ExecutionResult",
     "StreamConfig",
+    "ProcessInfo",
+    "EnvironmentInfo",
+    "SystemHealth",
+    "ConnectionInfo",
+    "FileInfo",
+    # Exceptions
     "VMServiceError",
     "SandboxCreationError", 
     "SandboxNotFoundError",
-    "AuthenticationError"
+    "AuthenticationError",
+    "QuotaExceededError",
+    "FileOperationError",
+    "ApplicationError",
+    "StreamError",
+    "ProcessError",
+    "EnvironmentError",
+    "ConnectionError",
+    "ResourceLimitError",
+    "HealthCheckError"
 ]

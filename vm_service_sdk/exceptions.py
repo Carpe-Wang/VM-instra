@@ -71,7 +71,10 @@ class QuotaExceededError(VMServiceError):
 
 class NetworkError(VMServiceError):
     """网络错误"""
-    pass
+    
+    def __init__(self, message: str, endpoint: Optional[str] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.endpoint = endpoint
 
 
 class FileOperationError(VMServiceError):
@@ -94,3 +97,53 @@ class ApplicationError(VMServiceError):
 class StreamError(VMServiceError):
     """流媒体错误"""
     pass
+
+
+class ProcessError(VMServiceError):
+    """进程操作错误"""
+    
+    def __init__(self, message: str, pid: Optional[int] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.pid = pid
+
+
+class EnvironmentError(VMServiceError):
+    """环境变量错误"""
+    
+    def __init__(self, message: str, variable_name: Optional[str] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.variable_name = variable_name
+
+
+class ConnectionError(VMServiceError):
+    """连接错误"""
+    
+    def __init__(self, message: str, connection_type: Optional[str] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.connection_type = connection_type
+
+
+class ResourceLimitError(VMServiceError):
+    """资源限制错误"""
+    
+    def __init__(self, message: str, resource_type: str, current_usage: float, limit: float, **kwargs):
+        super().__init__(message, **kwargs)
+        self.resource_type = resource_type
+        self.current_usage = current_usage
+        self.limit = limit
+
+
+class HealthCheckError(VMServiceError):
+    """健康检查错误"""
+    
+    def __init__(self, message: str, check_type: str, **kwargs):
+        super().__init__(message, **kwargs)
+        self.check_type = check_type
+
+
+class ConfigurationError(VMServiceError):
+    """配置错误"""
+    
+    def __init__(self, message: str, config_key: Optional[str] = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.config_key = config_key

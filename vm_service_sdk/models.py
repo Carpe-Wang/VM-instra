@@ -137,3 +137,66 @@ class ApplicationInfo:
     process_id: Optional[int] = None  # 进程ID
     window_ids: List[str] = field(default_factory=list)  # 窗口ID列表
     status: str = "unknown"  # running, stopped, error
+
+
+@dataclass
+class ProcessInfo:
+    """进程信息"""
+    pid: int  # 进程ID
+    user: str  # 用户名
+    cpu_percent: float  # CPU使用率百分比
+    memory_percent: float  # 内存使用率百分比
+    command: str  # 命令
+    status: str = "running"  # 进程状态
+    parent_pid: Optional[int] = None  # 父进程ID
+    start_time: Optional[str] = None  # 启动时间
+
+
+@dataclass
+class EnvironmentInfo:
+    """环境信息"""
+    variables: Dict[str, str]  # 环境变量字典
+    working_directory: str  # 工作目录
+    home_directory: str  # 用户主目录
+    user: str  # 当前用户
+    os_info: str  # 操作系统信息
+    shell: str = "/bin/bash"  # 默认Shell
+
+
+@dataclass
+class FileInfo:
+    """文件信息"""
+    name: str  # 文件名
+    path: str  # 完整路径
+    type: str  # 文件类型 (file, directory, link)
+    size: int  # 文件大小（字节）
+    permissions: str  # 文件权限
+    owner: Optional[str] = None  # 文件所有者
+    group: Optional[str] = None  # 文件组
+    modified_time: Optional[str] = None  # 修改时间
+    created_time: Optional[str] = None  # 创建时间
+
+
+@dataclass
+class SystemHealth:
+    """系统健康状态"""
+    cpu_usage_percent: float  # CPU使用率
+    memory_usage_percent: float  # 内存使用率
+    disk_usage_percent: float  # 磁盘使用率
+    network_active: bool  # 网络是否活跃
+    uptime_seconds: int  # 系统运行时间（秒）
+    load_average: List[float] = field(default_factory=list)  # 系统负载均值 [1min, 5min, 15min]
+    active_processes: int = 0  # 活跃进程数
+    total_memory_mb: int = 0  # 总内存MB
+    available_memory_mb: int = 0  # 可用内存MB
+
+
+@dataclass
+class ConnectionInfo:
+    """连接信息"""
+    sandbox_id: str  # 沙箱ID
+    connected_at: datetime  # 连接时间
+    last_activity: datetime  # 最后活动时间
+    is_active: bool = True  # 是否活跃
+    connection_type: str = "desktop"  # 连接类型
+    client_info: Dict[str, Any] = field(default_factory=dict)  # 客户端信息

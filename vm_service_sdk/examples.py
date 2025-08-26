@@ -89,6 +89,20 @@ async def basic_usage_example():
             )
             print(f"文件读取完成: {read_content[:50]}...")
             
+            # 新增：列出文件
+            files = await client.list_files(sandbox_info.sandbox_id, "/home/user")
+            print(f"用户目录文件数量: {len(files)}")
+            for file_info in files[:3]:  # 显示前3个文件
+                print(f"  - {file_info['name']} ({file_info['type']}, {file_info['size']} bytes)")
+            
+            # 新增：检查文件存在
+            exists = await client.file_exists(sandbox_info.sandbox_id, "/home/user/test.txt")
+            print(f"测试文件存在: {exists}")
+            
+            # 新增：创建目录
+            await client.create_directory(sandbox_info.sandbox_id, "/home/user/test_dir")
+            print("创建目录完成")
+            
             # 5. 命令执行
             print("执行系统命令...")
             
@@ -109,7 +123,54 @@ async def basic_usage_example():
             print(f"流媒体URL: {stream_url}")
             print(f"认证密钥: {auth_key[:20]}...")
             
-            # 7. 查看统计信息
+            # 7. 进程管理示例
+            print("进程管理操作...")
+            
+            # 列出进程
+            processes = await client.list_processes(sandbox_info.sandbox_id)
+            print(f"活跃进程数: {len(processes)}")
+            
+            # 显示前5个进程
+            for proc in processes[:5]:
+                print(f"  PID: {proc.pid}, 用户: {proc.user}, CPU: {proc.cpu_percent}%, 命令: {proc.command[:30]}...")
+            
+            # 8. 环境管理示例
+            print("环境管理操作...")
+            
+            # 设置环境变量
+            await client.set_environment_variable(sandbox_info.sandbox_id, "TEST_VAR", "Hello World")
+            print("设置环境变量完成")
+            
+            # 获取环境变量
+            test_var = await client.get_environment_variable(sandbox_info.sandbox_id, "TEST_VAR")
+            print(f"获取环境变量 TEST_VAR: {test_var}")
+            
+            # 获取完整环境信息
+            env_info = await client.get_environment(sandbox_info.sandbox_id)
+            print(f"环境信息: 用户={env_info.user}, 工作目录={env_info.working_directory}")
+            print(f"环境变量数量: {len(env_info.variables)}")
+            
+            # 9. 健康监控示例
+            print("健康监控操作...")
+            
+            # 检查系统健康
+            system_health = await client.get_system_health(sandbox_info.sandbox_id)
+            print(f"系统健康: CPU={system_health.cpu_usage_percent:.1f}%, "
+                  f"内存={system_health.memory_usage_percent:.1f}%, "
+                  f"磁盘={system_health.disk_usage_percent:.1f}%")
+            
+            # 检查沙箱健康
+            health_check = await client.check_sandbox_health(sandbox_info.sandbox_id)
+            print(f"沙箱健康: {health_check['healthy']}, 问题数: {len(health_check['issues'])}")
+            
+            # 10. 流媒体管理示例
+            print("流媒体管理操作...")
+            
+            # 获取流媒体状态
+            stream_status = await client.get_stream_status(sandbox_info.sandbox_id)
+            print(f"流媒体状态: {stream_status}")
+            
+            # 11. 查看统计信息
             stats = await client.get_stats()
             print(f"服务统计: {stats}")
             
@@ -351,6 +412,168 @@ async def web_service_integration_example():
         await service.shutdown()
 
 
+async def advanced_features_example():
+    """高级功能示例"""
+    print("\n=== 高级功能示例 ===")
+    
+    if not os.environ.get("E2B_API_KEY"):
+        print("跳过高级功能示例 - 需要E2B_API_KEY")
+        return
+    
+    async with VMServiceClient(
+        api_key=os.environ.get("E2B_API_KEY"),
+        max_concurrent_sandboxes=5
+    ) as client:
+        
+        try:
+            # 1. 创建沙箱用于高级测试
+            print("创建高级测试沙箱...")
+            sandbox_info = await client.create_sandbox(
+                user_id="advanced_user",
+                config=SandboxConfig(
+                    cpu_count=2,
+                    memory_mb=2048,
+                    timeout_seconds=3600
+                )
+            )
+            print(f"高级测试沙箱创建: {sandbox_info.sandbox_id}")
+            
+            # 2. 文件系统高级操作
+            print("文件系统高级操作...")
+            
+            # 创建多级目录结构
+            await client.create_directory(sandbox_info.sandbox_id, "/home/user/projects/test-app/src")
+            await client.create_directory(sandbox_info.sandbox_id, "/home/user/projects/test-app/tests")
+            
+            # 创建多个测试文件
+            test_files = {
+                "/home/user/projects/test-app/README.md": "# Test Application\nThis is a test project",
+                "/home/user/projects/test-app/src/main.py": "#!/usr/bin/env python3\nprint('Hello, World!')",
+                "/home/user/projects/test-app/tests/test_main.py": "import unittest\nclass TestMain(unittest.TestCase):\n    pass"
+            }
+            
+            for file_path, content in test_files.items():
+                await client.write_file(sandbox_info.sandbox_id, file_path, content)
+            
+            # 列出项目文件
+            project_files = await client.list_files(sandbox_info.sandbox_id, "/home/user/projects/test-app")
+            print(f"项目根目录文件: {[f['name'] for f in project_files]}")
+            
+            # 3. 进程监控和管理
+            print("进程监控和管理...")
+            
+            # 启动一个后台进程
+            await client.run_command(sandbox_info.sandbox_id, "sleep 30 &")
+            
+            # 列出所有进程并找到sleep进程
+            processes = await client.list_processes(sandbox_info.sandbox_id)
+            sleep_processes = [p for p in processes if 'sleep' in p.command]
+            
+            if sleep_processes:
+                sleep_proc = sleep_processes[0]
+                print(f"找到sleep进程: PID={sleep_proc.pid}, 命令={sleep_proc.command}")
+                
+                # 获取特定进程信息
+                proc_info = await client.get_process_info(sandbox_info.sandbox_id, sleep_proc.pid)
+                if proc_info:
+                    print(f"进程详情: 用户={proc_info.user}, CPU={proc_info.cpu_percent}%")
+                
+                # 杀死进程
+                await client.kill_process(sandbox_info.sandbox_id, sleep_proc.pid)
+                print("Sleep进程已终止")
+            
+            # 4. 环境变量管理
+            print("环境变量管理...")
+            
+            # 设置多个环境变量
+            env_vars = {
+                "PROJECT_NAME": "test-app",
+                "ENVIRONMENT": "development",
+                "DEBUG": "true",
+                "VERSION": "1.0.0"
+            }
+            
+            for key, value in env_vars.items():
+                await client.set_environment_variable(sandbox_info.sandbox_id, key, value)
+            
+            # 获取完整环境
+            env_info = await client.get_environment(sandbox_info.sandbox_id)
+            print(f"环境变量总数: {len(env_info.variables)}")
+            
+            # 验证设置的环境变量
+            for key in env_vars.keys():
+                value = await client.get_environment_variable(sandbox_info.sandbox_id, key)
+                print(f"  {key}={value}")
+            
+            # 5. 系统健康深度监控
+            print("系统健康深度监控...")
+            
+            # 运行一些CPU密集型任务来测试监控
+            await client.run_command(sandbox_info.sandbox_id, "dd if=/dev/zero of=/tmp/test bs=1M count=100")
+            
+            # 监控系统健康
+            for i in range(3):
+                health = await client.get_system_health(sandbox_info.sandbox_id)
+                print(f"监控轮次 {i+1}: CPU={health.cpu_usage_percent:.1f}%, "
+                      f"内存={health.memory_usage_percent:.1f}%, "
+                      f"磁盘={health.disk_usage_percent:.1f}%, "
+                      f"负载={health.load_average}")
+                await asyncio.sleep(2)
+            
+            # 6. 连接管理测试
+            print("连接管理测试...")
+            
+            # 获取连接信息
+            connection = await client.get_connection_info(sandbox_info.sandbox_id)
+            if connection:
+                print(f"连接建立时间: {connection.connected_at}")
+                print(f"最后活动时间: {connection.last_activity}")
+                print(f"连接状态: {'活跃' if connection.is_active else '非活跃'}")
+            
+            # 更新连接活动时间
+            await client.update_connection_activity(sandbox_info.sandbox_id)
+            print("连接活动时间已更新")
+            
+            # 7. 流媒体高级管理
+            print("流媒体高级管理...")
+            
+            # 启动流媒体
+            stream_url, auth_key = await client.start_stream(sandbox_info.sandbox_id)
+            print(f"流媒体已启动: {stream_url[:50]}...")
+            
+            # 检查流媒体状态
+            stream_status = await client.get_stream_status(sandbox_info.sandbox_id)
+            print(f"流媒体状态: 正在流式传输={stream_status['is_streaming']}")
+            
+            # 停止流媒体
+            await client.stop_stream(sandbox_info.sandbox_id)
+            print("流媒体已停止")
+            
+            # 8. 综合健康检查
+            print("综合健康检查...")
+            
+            health_report = await client.check_sandbox_health(sandbox_info.sandbox_id)
+            print(f"沙箱健康报告:")
+            print(f"  总体健康: {'健康' if health_report['healthy'] else '不健康'}")
+            print(f"  活跃状态: {health_report['is_active']}")
+            print(f"  连接状态: {health_report['connection_active']}")
+            if health_report['issues']:
+                print(f"  发现问题: {health_report['issues']}")
+            
+            # 9. 批量清理测试
+            print("批量清理测试...")
+            
+            # 删除创建的测试文件
+            await client.delete_file(sandbox_info.sandbox_id, "/home/user/projects")
+            await client.delete_file(sandbox_info.sandbox_id, "/tmp/test")
+            print("测试文件已清理")
+            
+        except Exception as e:
+            print(f"高级功能示例错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+
 async def error_handling_example():
     """错误处理示例"""
     print("\n=== 错误处理示例 ===")
@@ -404,6 +627,7 @@ async def main():
         await basic_usage_example()
         await multi_user_example()
         await web_service_integration_example()
+        await advanced_features_example()
         await error_handling_example()
         
     except Exception as e:
