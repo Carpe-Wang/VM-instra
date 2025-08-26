@@ -84,6 +84,15 @@ class FileOperationError(VMServiceError):
         super().__init__(message, **kwargs)
         self.file_path = file_path
         self.operation = operation
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        result = super().to_dict()
+        result.update({
+            "file_path": self.file_path,
+            "operation": self.operation
+        })
+        return result
 
 
 class ApplicationError(VMServiceError):
