@@ -1,0 +1,292 @@
+# Enterprise Windows Infrastructure Platform Configuration
+# Simplified EC2-based configuration for direct Windows VM management
+# Removed Kubernetes/KubeVirt complexity for faster deployment
+
+# AWS Infrastructure Settings
+aws:
+  region: "us-west-2"
+  # Credentials can be provided via environment variables or AWS profiles
+  # access_key_id: ""  # Set via AWS_ACCESS_KEY_ID
+  # secret_access_key: ""  # Set via AWS_SECRET_ACCESS_KEY
+  # profile: "default"  # Set via AWS_PROFILE
+  
+  # EC2 Instance Configuration
+  default_instance_types:
+    - "m5.large"    # 2 vCPU, 8GB RAM
+    - "m5.xlarge"   # 4 vCPU, 16GB RAM  
+    - "m5.2xlarge"  # 8 vCPU, 32GB RAM
+    - "c5.large"    # 2 vCPU, 4GB RAM (CPU optimized)
+    - "c5.xlarge"   # 4 vCPU, 8GB RAM (CPU optimized)
+  
+  spot_instance_preferred: true
+  max_spot_price: 0.10  # $0.10 per hour maximum
+  
+  # VPC and Networking (optional - will use default VPC if not specified)
+  # vpc_id: "vpc-xxxxxxxxx"
+  # subnet_ids:
+  #   - "subnet-xxxxxxxxx"
+  #   - "subnet-yyyyyyyyy"
+  # default_security_group: "sg-xxxxxxxxx"
+  
+  # Windows AMI Configuration
+  windows_ami_filter: "Windows_Server-2022-English-Full-Base-*"
+  windows_ami_owner: "801119661308"  # Amazon
+
+# VM Configuration  
+vm:
+  # Default VM Specifications
+  default_instance_type: "m5.large"
+  default_disk_size_gb: 100
+  
+  # Windows Configuration
+  windows_startup_timeout: 600  # 10 minutes
+  windows_software_packages:
+    - "googlechrome"
+    - "firefox"
+    - "notepadplusplus"
+    - "7zip"
+    - "vscode"  # Optional: Visual Studio Code
+  
+  # Storage Configuration
+  storage_type: "gp3"  # General Purpose SSD v3
+  storage_encrypted: true
+  storage_iops: 3000
+  
+  # RDP Configuration
+  rdp_port: 3389
+  rdp_username: "Administrator"
+  
+  # TightVNC Configuration
+  vnc_port: 5900
+  vnc_password: "VNCPass123!"  # Change this in production
+  vnc_auto_install: true
+  vnc_service_auto_start: true
+  vnc_display_number: 0
+  vnc_geometry: "1920x1080"
+  vnc_color_depth: 24
+
+# User Isolation and Security
+isolation:
+  # Security Group Isolation
+  dedicated_security_groups: true
+  security_group_rules:
+    rdp_access:
+      - protocol: "tcp"
+        from_port: 3389
+        to_port: 3389
+        cidr_blocks: ["0.0.0.0/0"]  # Restrict to specific IP ranges in production
+    vnc_access:
+      - protocol: "tcp"
+        from_port: 5900
+        to_port: 5900
+        cidr_blocks: ["0.0.0.0/0"]  # Restrict to specific IP ranges in production
+    web_vnc_gateway:
+      - protocol: "tcp"
+        from_port: 8080
+        to_port: 8080
+        cidr_blocks: ["0.0.0.0/0"]  # HTTP server for VNC viewer
+      - protocol: "tcp"
+        from_port: 8765
+        to_port: 8765
+        cidr_blocks: ["0.0.0.0/0"]  # WebSocket server for VNC gateway
+  
+  # Instance Tagging Strategy
+  user_isolation_tags: true
+  required_tags:
+    - "User"
+    - "SessionId" 
+    - "ManagedBy"
+    - "Environment"
+    - "Project"
+  
+  # Enhanced Isolation Options (optional)
+  subnet_isolation: false
+  dedicated_key_pairs: false
+  
+  # Session Management
+  session_directories: true
+  session_cleanup_on_termination: true
+
+# Cost Optimization
+cost_optimization:
+  # Spot Instance Configuration
+  spot_instances_enabled: true
+  spot_percentage: 80.0  # 80% of instances as spot
+  spot_interruption_handling: "graceful"
+  
+  # Auto-scaling Configuration
+  max_concurrent_instances: 50
+  scale_down_delay_minutes: 15
+  idle_timeout_minutes: 30
+  
+  # Budget Controls
+  # hourly_budget_limit: 10.0    # $10 per hour
+  # daily_budget_limit: 200.0    # $200 per day
+  # monthly_budget_limit: 5000.0 # $5000 per month
+  alert_threshold_percentage: 80.0
+  
+  # Resource Optimization
+  unused_instance_cleanup: true
+  automatic_instance_rightsizing: true
+  storage_optimization: true
+
+# Logging and Monitoring
+logging:
+  level: "INFO"
+  format: "json"
+  destinations:
+    - "console"
+    - "cloudwatch"  # Optional: AWS CloudWatch integration
+  
+  # AWS CloudWatch Configuration
+  # cloudwatch_log_group: "/infrastructure-sdk/production"
+  # cloudwatch_log_stream: "vm-management"
+  
+  # Log Retention
+  retention_days: 30
+  
+  # Performance and Cost Logging
+  performance_logging: true
+  cost_logging: true
+
+# Global Settings
+environment: "production"
+project_name: "enterprise-vm-platform"
+
+# Example Usage Configuration for Different Use Cases
+usage_profiles:
+  # Light Development Work
+  developer:
+    instance_type: "m5.large"
+    disk_size_gb: 100
+    session_timeout_hours: 8
+    software_packages: ["vscode", "git", "chrome"]
+  
+  # Heavy Development/Testing
+  power_user:
+    instance_type: "m5.xlarge"
+    disk_size_gb: 200
+    session_timeout_hours: 12
+    software_packages: ["vscode", "docker-desktop", "chrome", "postman"]
+  
+  # Demonstration/Training
+  demo:
+    instance_type: "m5.large"
+    disk_size_gb: 50
+    session_timeout_hours: 4
+    software_packages: ["chrome", "notepad++"]
+
+# Deployment Settings
+deployment:
+  # Simplified deployment without Kubernetes
+  deployment_type: "ec2_direct"  # Direct EC2 management
+  
+  # Health Check Configuration
+  health_check_interval_seconds: 60
+  health_check_timeout_seconds: 30
+  
+  # Automatic Updates
+  auto_update_instances: false  # Set to true for automatic Windows updates
+  maintenance_window: "02:00-04:00"  # UTC time window for maintenance
+
+# Integration Settings (Simplified)
+integrations:
+  aws:
+    cloudwatch_integration: true
+    s3_storage_bucket: ""  # Optional: for session artifacts and backups
+  
+  # Optional: Active Directory integration for enterprise users
+  active_directory:
+    enabled: false
+    # domain_controller: ""
+    # service_account: ""
+  
+  # Optional: LDAP integration
+  ldap:
+    enabled: false
+    # server_url: ""
+    # bind_dn: ""
+
+# Disaster Recovery and Backup
+backup:
+  enabled: true
+  frequency_hours: 12  # Backup every 12 hours
+  retention_days: 7    # Keep backups for 7 days
+  cross_region_backup: false  # Optional: backup to different region
+
+# Performance Optimization
+performance:
+  # Instance Optimization
+  enable_enhanced_networking: true
+  enable_nitro_enclaves: false
+  
+  # Storage Optimization  
+  use_instance_store: false  # Use EBS instead of instance store
+  ebs_optimized: true
+  
+  # Network Optimization
+  placement_group: ""  # Optional: for low-latency networking
+
+# VNC Web Gateway Configuration
+vnc_gateway:
+  # WebSocket server settings
+  websocket_host: "0.0.0.0"
+  websocket_port: 8765
+  
+  # HTTP server settings
+  http_host: "0.0.0.0"
+  http_port: 8080
+  
+  # Performance settings
+  max_concurrent_sessions: 50
+  frame_rate_limit: 18  # Target FPS for screen streaming
+  compression_level: 6
+  
+  # Security settings
+  allowed_origins: ["*"]  # Restrict origins in production
+  authentication_required: false
+  session_timeout_minutes: 60
+  
+  # VNC connection settings
+  vnc_connect_timeout: 30
+  vnc_read_timeout: 10
+  vnc_keepalive_interval: 30
+  vnc_quality: 6  # JPEG quality 0-9
+  vnc_mouse_acceleration: 1.0
+  vnc_keyboard_delay_ms: 50
+
+# TightVNC Server Configuration
+tightvnc:
+  # Installation settings
+  auto_install: true
+  download_url: "https://www.tightvnc.com/download/2.8.27/tightvnc-2.8.27-gpl-setup-64bit.msi"
+  
+  # Server settings
+  service_name: "TightVNC Server"
+  display_number: 0
+  port: 5900
+  password: "VNCPass123!"  # Use environment variables in production
+  
+  # Display settings
+  geometry: "1920x1080"
+  color_depth: 24
+  
+  # Security settings
+  enable_file_transfers: false
+  enable_clipboard: true
+  view_only: false
+  
+  # Logging settings
+  log_level: "Normal"  # Errors, Normal, Detailed
+  log_file: "C:\\Program Files\\TightVNC\\Server\\log.txt"
+
+# Development and Testing Settings
+development:
+  # Testing Configuration
+  mock_aws_services: false
+  local_development: false
+  debug_mode: false
+  
+  # Development Shortcuts
+  skip_windows_updates: true  # Skip time-consuming updates in dev
+  fast_instance_termination: true
