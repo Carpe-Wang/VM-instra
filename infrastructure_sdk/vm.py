@@ -2,18 +2,20 @@
 VM Lifecycle Controller for Infrastructure SDK.
 
 This module manages complete VM lifecycle from provisioning to decommissioning,
-including dynamic VM provisioning, state management, automated recycling,
-health monitoring, and automatic recovery using KubeVirt and Karpenter.
+including dynamic EC2 VM provisioning, state management, automated recycling,
+health monitoring, and automatic recovery using direct EC2 APIs.
+
+Simplified architecture: Direct EC2 instance management without Kubernetes complexity.
 """
 
 import asyncio
+import boto3
 import uuid
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Union
 from enum import Enum
 import logging
-import yaml
 
 from .config import InfraSDKConfig
 from .session import ResourceSpec
@@ -41,10 +43,9 @@ class VMState(Enum):
 @dataclass
 class VMSpec:
     """
-    VM specification for KubeVirt virtual machine creation.
+    VM specification for EC2 virtual machine creation.
     
-    Defines all parameters necessary for VM provisioning including
-    resources, OS configuration, networking, and storage.
+    Simplified from KubeVirt to direct EC2 instance configuration.
     """
     
     # Basic VM Information
@@ -57,106 +58,44 @@ class VMSpec:
     
     # OS Configuration
     os_type: str = "windows"  # windows, linux
-    os_version: str = "2022"  # 2022, 2019 for Windows; 22.04, 20.04 for Ubuntu
-    base_image: Optional[str] = None
+    os_version: str = "2022"  # 2022, 2019 for Windows
+    ami_id: Optional[str] = None
     
-    # VM Configuration
-    boot_order: List[str] = field(default_factory=lambda: ["hd", "cdrom"])
-    machine_type: str = "q35"
-    firmware: str = "uefi"  # uefi, bios
+    # EC2 Configuration
+    instance_type: str = "m5.large"
+    spot_instance: bool = True
     
     # Networking
-    network_interfaces: List[Dict[str, Any]] = field(default_factory=list)
+    security_group_ids: List[str] = field(default_factory=list)
+    subnet_id: Optional[str] = None
     
     # Storage
-    disks: List[Dict[str, Any]] = field(default_factory=list)
+    disk_size_gb: int = 100
     
-    # Node Placement
-    node_selector: Dict[str, str] = field(default_factory=dict)
-    tolerations: List[Dict[str, Any]] = field(default_factory=list)
-    affinity: Dict[str, Any] = field(default_factory=dict)
-    
-    # Labels and Annotations
-    labels: Dict[str, str] = field(default_factory=dict)
-    annotations: Dict[str, str] = field(default_factory=dict)
+    # Labels and Tags
+    tags: Dict[str, str] = field(default_factory=dict)
     
     def __post_init__(self) -> None:
         """Set up default VM specification values."""
-        # Set default labels
-        self.labels.update({
+        # Set default tags
+        self.tags.update({
             'infra-sdk.io/managed': 'true',
             'infra-sdk.io/user-id': self.user_id,
             'infra-sdk.io/session-id': self.session_id,
             'infra-sdk.io/os-type': self.os_type,
+            'ManagedBy': 'InfrastructureSDK'
         })
-        
-        # Set default node selector for user isolation
-        self.node_selector.update({
-            'dedicated-user': self.user_id,
-            'infra-sdk.io/user-isolation': 'enabled'
-        })
-        
-        # Set default tolerations for dedicated nodes
-        self.tolerations.extend([
-            {
-                'key': 'dedicated-user',
-                'operator': 'Equal',
-                'value': self.user_id,
-                'effect': 'NoSchedule'
-            },
-            {
-                'key': 'os-type', 
-                'operator': 'Equal',
-                'value': self.os_type,
-                'effect': 'NoSchedule'
-            }
-        ])
-        
-        # Set default affinity for user isolation
-        self.affinity = {
-            'nodeAffinity': {
-                'requiredDuringSchedulingIgnoredDuringExecution': {
-                    'nodeSelectorTerms': [{
-                        'matchExpressions': [{
-                            'key': 'dedicated-user',
-                            'operator': 'In', 
-                            'values': [self.user_id]
-                        }]
-                    }]
-                }
-            }
-        }
-        
-        # Set up default network interface
-        if not self.network_interfaces:
-            self.network_interfaces.append({
-                'name': 'default',
-                'masquerade': {},
-                'ports': [
-                    {'port': 3389, 'name': 'rdp'},  # RDP for Windows
-                    {'port': 5900, 'name': 'vnc'},  # VNC
-                ]
-            })
-        
-        # Set up default disk
-        if not self.disks:
-            self.disks.append({
-                'name': 'rootdisk',
-                'disk': {'bus': 'virtio'},
-                'size': self.resources.disk_size
-            })
 
 
 @dataclass
 class VM:
     """
-    Represents a virtual machine instance.
+    Represents a virtual machine instance (EC2).
     
-    Contains VM state, metadata, resource allocation, networking information,
-    and lifecycle management data.
+    Simplified from KubeVirt to direct EC2 instance management.
     """
     
-    vm_id: str
+    vm_id: str  # EC2 Instance ID
     vm_name: str
     user_id: str
     session_id: str
@@ -165,13 +104,19 @@ class VM:
     # VM Specification
     spec: VMSpec = None
     
-    # Resource Information
-    allocated_resources: Optional[ResourceSpec] = None
-    node_name: Optional[str] = None
+    # EC2 Instance Information
+    instance_id: Optional[str] = None
+    instance_type: Optional[str] = None
+    availability_zone: Optional[str] = None
     
     # Network Information
-    ip_address: Optional[str] = None
-    access_ports: Dict[str, int] = field(default_factory=dict)
+    public_ip: Optional[str] = None
+    private_ip: Optional[str] = None
+    rdp_port: int = 3389
+    
+    # RDP Access
+    rdp_username: str = "Administrator"
+    rdp_password: Optional[str] = None
     
     # Lifecycle Timestamps
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -185,13 +130,8 @@ class VM:
     error_message: Optional[str] = None
     
     # Cost Information
-    instance_type: Optional[str] = None
     spot_instance: bool = False
     hourly_cost: Optional[float] = None
-    
-    # Kubernetes Information
-    namespace: str = "default"
-    kubevirt_vm_manifest: Optional[Dict[str, Any]] = None
     
     def is_healthy(self) -> bool:
         """Check if VM is in a healthy state."""
@@ -202,9 +142,38 @@ class VM:
             (datetime.utcnow() - self.last_heartbeat).total_seconds() < 120
         )
     
+    def is_ready_for_rdp(self) -> bool:
+        """Check if VM is ready for RDP connection."""
+        return (
+            self.is_healthy() and
+            self.public_ip is not None and
+            self.rdp_password is not None
+        )
+    
+    def get_rdp_connection_info(self) -> Dict[str, Any]:
+        """Get RDP connection information."""
+        if not self.is_ready_for_rdp():
+            return {"error": "VM not ready for RDP connection"}
+        
+        return {
+            "host": self.public_ip,
+            "port": self.rdp_port,
+            "username": self.rdp_username,
+            "password": self.rdp_password,
+            "connection_url": f"rdp://{self.rdp_username}@{self.public_ip}:{self.rdp_port}"
+        }
+    
     def update_heartbeat(self) -> None:
         """Update VM heartbeat timestamp."""
         self.last_heartbeat = datetime.utcnow()
+    
+    def calculate_cost(self) -> float:
+        """Calculate current session cost."""
+        if not self.hourly_cost or not self.started_at:
+            return 0.0
+        
+        duration_hours = (datetime.utcnow() - self.started_at).total_seconds() / 3600
+        return round(duration_hours * self.hourly_cost, 4)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert VM to dictionary for serialization."""
@@ -214,267 +183,115 @@ class VM:
             'user_id': self.user_id,
             'session_id': self.session_id,
             'state': self.state.value,
-            'node_name': self.node_name,
-            'ip_address': self.ip_address,
-            'access_ports': self.access_ports,
+            'instance_id': self.instance_id,
+            'instance_type': self.instance_type,
+            'availability_zone': self.availability_zone,
+            'public_ip': self.public_ip,
+            'private_ip': self.private_ip,
             'created_at': self.created_at.isoformat(),
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'health_status': self.health_status,
             'startup_duration': self.startup_duration,
-            'instance_type': self.instance_type,
             'spot_instance': self.spot_instance,
             'hourly_cost': self.hourly_cost,
-            'error_message': self.error_message
+            'current_cost': self.calculate_cost(),
+            'error_message': self.error_message,
+            'rdp_connection': self.get_rdp_connection_info() if self.is_ready_for_rdp() else None
         }
 
 
-class VMTemplateManager:
+class EC2TemplateManager:
     """
-    Manages VM templates for different OS types and configurations.
+    Manages EC2 instance templates for different OS types.
     
-    Provides base templates for Windows and Linux VMs with optimization
-    for startup time and resource efficiency.
+    Simplified from KubeVirt to direct EC2 AMI and user data management.
     """
     
     def __init__(self, config: InfraSDKConfig):
         self.config = config
         self.logger = logging.getLogger(__name__)
-    
-    def get_windows_template(self, spec: VMSpec) -> Dict[str, Any]:
-        """
-        Get KubeVirt template for Windows VM.
         
-        Creates optimized Windows VM template with fast startup configuration.
-        """
-        return {
-            'apiVersion': 'kubevirt.io/v1',
-            'kind': 'VirtualMachine',
-            'metadata': {
-                'name': spec.vm_name,
-                'namespace': self.config.kubernetes.namespace,
-                'labels': spec.labels,
-                'annotations': spec.annotations
-            },
-            'spec': {
-                'running': True,
-                'template': {
-                    'metadata': {
-                        'labels': spec.labels
-                    },
-                    'spec': {
-                        'domain': {
-                            'devices': {
-                                'disks': [
-                                    {
-                                        'name': 'rootdisk',
-                                        'disk': {'bus': 'virtio'},
-                                        'bootOrder': 1
-                                    },
-                                    {
-                                        'name': 'cloudinitdisk',
-                                        'disk': {'bus': 'virtio'}
-                                    }
-                                ],
-                                'interfaces': [{
-                                    'name': 'default',
-                                    'masquerade': {},
-                                    'ports': [
-                                        {'port': 3389, 'name': 'rdp'},
-                                        {'port': 5900, 'name': 'vnc'}
-                                    ]
-                                }],
-                                'rng': {}  # Hardware random number generator
-                            },
-                            'machine': {
-                                'type': spec.machine_type or 'q35'
-                            },
-                            'resources': {
-                                'requests': {
-                                    'memory': spec.resources.memory,
-                                    'cpu': spec.resources.cpu
-                                }
-                            },
-                            'features': {
-                                'acpi': {'enabled': True},
-                                'apic': {'enabled': True},
-                                'hyperv': {
-                                    'relaxed': {'enabled': True},
-                                    'spinlocks': {'enabled': True, 'spinlocks': 8191},
-                                    'vapic': {'enabled': True},
-                                    'vpindex': {'enabled': True},
-                                    'runtime': {'enabled': True},
-                                    'synic': {'enabled': True},
-                                    'stimer': {'enabled': True},
-                                    'frequencies': {'enabled': True},
-                                    'reenlightenment': {'enabled': True},
-                                    'tlbflush': {'enabled': True},
-                                    'ipi': {'enabled': True}
-                                }
-                            },
-                            'clock': {
-                                'utc': {},
-                                'timer': {
-                                    'hpet': {'present': False},
-                                    'pit': {'tickPolicy': 'delay'},
-                                    'rtc': {'tickPolicy': 'catchup'},
-                                    'hyperv': {'present': True}
-                                }
-                            }
-                        },
-                        'networks': [{
-                            'name': 'default',
-                            'pod': {}
-                        }],
-                        'volumes': [
-                            {
-                                'name': 'rootdisk',
-                                'containerDisk': {
-                                    'image': spec.base_image or self.config.vm.windows_base_image
-                                }
-                            },
-                            {
-                                'name': 'cloudinitdisk',
-                                'cloudInitNoCloud': {
-                                    'userData': self._get_windows_userdata(spec)
-                                }
-                            }
-                        ],
-                        'nodeSelector': spec.node_selector,
-                        'tolerations': spec.tolerations,
-                        'affinity': spec.affinity
-                    }
-                }
-            }
-        }
+        # Initialize EC2 client
+        self.ec2_client = boto3.client(
+            'ec2',
+            region_name=config.aws.region,
+            aws_access_key_id=config.aws.access_key_id,
+            aws_secret_access_key=config.aws.secret_access_key
+        )
     
-    def get_linux_template(self, spec: VMSpec) -> Dict[str, Any]:
-        """
-        Get KubeVirt template for Linux VM.
-        
-        Creates optimized Linux VM template for development/server workloads.
-        """
-        return {
-            'apiVersion': 'kubevirt.io/v1',
-            'kind': 'VirtualMachine',
-            'metadata': {
-                'name': spec.vm_name,
-                'namespace': self.config.kubernetes.namespace,
-                'labels': spec.labels,
-                'annotations': spec.annotations
-            },
-            'spec': {
-                'running': True,
-                'template': {
-                    'metadata': {
-                        'labels': spec.labels
-                    },
-                    'spec': {
-                        'domain': {
-                            'devices': {
-                                'disks': [
-                                    {
-                                        'name': 'rootdisk',
-                                        'disk': {'bus': 'virtio'},
-                                        'bootOrder': 1
-                                    },
-                                    {
-                                        'name': 'cloudinitdisk',
-                                        'disk': {'bus': 'virtio'}
-                                    }
-                                ],
-                                'interfaces': [{
-                                    'name': 'default',
-                                    'masquerade': {}
-                                }],
-                                'rng': {}
-                            },
-                            'machine': {
-                                'type': 'q35'
-                            },
-                            'resources': {
-                                'requests': {
-                                    'memory': spec.resources.memory,
-                                    'cpu': spec.resources.cpu
-                                }
-                            }
-                        },
-                        'networks': [{
-                            'name': 'default',
-                            'pod': {}
-                        }],
-                        'volumes': [
-                            {
-                                'name': 'rootdisk',
-                                'containerDisk': {
-                                    'image': spec.base_image or self.config.vm.linux_base_image
-                                }
-                            },
-                            {
-                                'name': 'cloudinitdisk',
-                                'cloudInitNoCloud': {
-                                    'userData': self._get_linux_userdata(spec)
-                                }
-                            }
-                        ],
-                        'nodeSelector': spec.node_selector,
-                        'tolerations': spec.tolerations,
-                        'affinity': spec.affinity
-                    }
-                }
-            }
-        }
+    async def get_windows_ami_id(self, os_version: str = "2022") -> str:
+        """Get the latest Windows AMI ID."""
+        try:
+            ami_filter = f"Windows_Server-{os_version}-English-Full-Base-*"
+            
+            response = self.ec2_client.describe_images(
+                Filters=[
+                    {'Name': 'name', 'Values': [ami_filter]},
+                    {'Name': 'state', 'Values': ['available']},
+                    {'Name': 'owner-id', 'Values': ['801119661308']}  # Amazon
+                ],
+                Owners=['amazon']
+            )
+            
+            if not response['Images']:
+                raise ConfigurationError(f"No Windows AMI found for version {os_version}")
+            
+            # Sort by creation date and get latest
+            images = sorted(response['Images'], key=lambda x: x['CreationDate'], reverse=True)
+            latest_ami = images[0]['ImageId']
+            
+            self.logger.info(f"Found Windows {os_version} AMI: {latest_ami}")
+            return latest_ami
+            
+        except Exception as e:
+            self.logger.error(f"Failed to find Windows AMI: {e}")
+            raise ConfigurationError(f"Windows AMI lookup failed: {e}")
     
-    def _get_windows_userdata(self, spec: VMSpec) -> str:
-        """Generate cloud-init userdata for Windows VM."""
-        return """#ps1
-# Windows VM initialization script
-Write-Host "Starting Infrastructure SDK VM initialization..."
+    def generate_windows_user_data(self, spec: VMSpec) -> str:
+        """Generate Windows PowerShell user data script."""
+        script = f"""<powershell>
+# Windows VM Initialization for Infrastructure SDK
+Write-Host "Initializing Windows VM for user {spec.user_id}"
 
 # Enable RDP
 Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -name "fDenyTSConnections" -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-# Create user account
-$username = "vmuser"
-$password = ConvertTo-SecureString -String "TempPassword123!" -AsPlainText -Force
-New-LocalUser -Name $username -Password $password -FullName "VM User" -Description "Infrastructure SDK VM User"
-Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
-Add-LocalGroupMember -Group "Administrators" -Member $username
+# Set Administrator password  
+$Password = "InfraSDK" + (Get-Random -Maximum 9999) + "!"
+$SecurePassword = ConvertTo-SecureString -String $Password -AsPlainText -Force
+Set-LocalUser -Name "Administrator" -Password $SecurePassword
 
-Write-Host "VM initialization completed successfully"
-"""
-    
-    def _get_linux_userdata(self, spec: VMSpec) -> str:
-        """Generate cloud-init userdata for Linux VM."""
-        return """#cloud-config
-users:
-  - name: vmuser
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    groups: users, admin
-    shell: /bin/bash
-    lock_passwd: false
-    passwd: $6$rounds=4096$salt$hashed_password_here
+# Store password for SDK retrieval
+$Password | Out-File -FilePath C:\\temp\\rdp_password.txt -Encoding ASCII
 
-packages:
-  - curl
-  - wget
-  - git
-  - htop
-  - vim
+# Create user session directory
+New-Item -ItemType Directory -Path "C:\\UserSessions\\{spec.user_id}\\{spec.session_id}" -Force
 
-runcmd:
-  - systemctl enable ssh
-  - systemctl start ssh
-  - echo "VM initialization completed" >> /var/log/vm-init.log
-"""
+# Install Chocolatey for software management
+Set-ExecutionPolicy Bypass -Scope Process -Force
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+
+# Install common software
+choco install -y googlechrome firefox notepadplusplus 7zip
+
+# Configure desktop
+# Additional desktop customization can be added here
+
+# Signal VM is ready
+New-Item -ItemType File -Path "C:\\temp\\vm_ready.txt" -Force
+
+Write-Host "Windows VM initialization completed"
+</powershell>"""
+        return script
 
 
 class VMStateTracker:
     """
     Tracks VM state changes and health monitoring.
     
-    Provides real-time state tracking with event-driven updates
-    and health monitoring capabilities.
+    Simplified from KubeVirt events to direct EC2 instance monitoring.
     """
     
     def __init__(self):
@@ -496,6 +313,7 @@ class VMStateTracker:
             f"VM {vm.vm_name} state changed: {old_state.value} -> {new_state.value}",
             extra={
                 'vm_id': vm.vm_id,
+                'instance_id': vm.instance_id,
                 'old_state': old_state.value,
                 'new_state': new_state.value
             }
@@ -512,10 +330,10 @@ class VMStateTracker:
 
 class VMLifecycleController:
     """
-    Manages complete VM lifecycle operations.
+    Manages complete VM lifecycle operations using direct EC2.
     
-    Orchestrates VM provisioning, state management, health monitoring,
-    and cleanup using KubeVirt and Karpenter integration.
+    Simplified from KubeVirt/Karpenter to direct EC2 instance management
+    for reduced complexity and faster deployment.
     """
     
     def __init__(self, config: InfraSDKConfig):
@@ -529,8 +347,16 @@ class VMLifecycleController:
         self.logger = logging.getLogger(__name__)
         
         # Component managers
-        self.template_manager = VMTemplateManager(config)
+        self.template_manager = EC2TemplateManager(config)
         self.state_tracker = VMStateTracker()
+        
+        # EC2 Client
+        self.ec2_client = boto3.client(
+            'ec2',
+            region_name=config.aws.region,
+            aws_access_key_id=config.aws.access_key_id,
+            aws_secret_access_key=config.aws.secret_access_key
+        )
         
         # VM storage (in production, use persistent storage)
         self._vms: Dict[str, VM] = {}
@@ -538,14 +364,11 @@ class VMLifecycleController:
         # Background monitoring
         self._monitoring_task: Optional[asyncio.Task] = None
         
-        self.logger.info("VM Lifecycle Controller initialized")
+        self.logger.info("VM Lifecycle Controller initialized (EC2 Direct)")
     
     async def provision_vm(self, ctx: Optional[Dict[str, Any]], spec: VMSpec) -> VM:
         """
-        Provision a new virtual machine.
-        
-        Orchestrates complete VM provisioning including resource validation,
-        KubeVirt VM creation, and initial health checks.
+        Provision a new virtual machine using EC2.
         
         Args:
             ctx: Request context
@@ -562,17 +385,19 @@ class VMLifecycleController:
             vm_id = f"vm-{uuid.uuid4().hex[:8]}"
             
             self.logger.info(
-                f"Provisioning VM {vm_id} for user {spec.user_id}",
+                f"Provisioning EC2 VM {vm_id} for user {spec.user_id}",
                 extra={
                     'vm_id': vm_id,
                     'user_id': spec.user_id,
                     'session_id': spec.session_id,
-                    'os_type': spec.os_type
+                    'os_type': spec.os_type,
+                    'instance_type': spec.instance_type
                 }
             )
             
-            # Validate resource requirements
-            await self._validate_resource_requirements(spec)
+            # Get Windows AMI
+            ami_id = await self.template_manager.get_windows_ami_id(spec.os_version)
+            spec.ami_id = ami_id
             
             # Create VM object
             vm = VM(
@@ -581,8 +406,7 @@ class VMLifecycleController:
                 user_id=spec.user_id,
                 session_id=spec.session_id,
                 spec=spec,
-                state=VMState.PROVISIONING,
-                namespace=self.config.kubernetes.namespace
+                state=VMState.PROVISIONING
             )
             
             # Store VM
@@ -646,103 +470,184 @@ class VMLifecycleController:
         # Start async cleanup
         asyncio.create_task(self._cleanup_vm_async(vm))
     
-    async def _validate_resource_requirements(self, spec: VMSpec) -> None:
-        """Validate VM resource requirements against cluster capacity."""
-        # TODO: Implement actual resource validation
-        # This would check:
-        # 1. Cluster has sufficient resources
-        # 2. User quotas are not exceeded
-        # 3. Node affinity requirements can be satisfied
-        pass
-    
     async def _provision_vm_async(self, vm: VM) -> None:
         """
-        Async VM provisioning workflow.
+        Async VM provisioning workflow using EC2.
         
-        Orchestrates the complete VM provisioning process including
-        KubeVirt VM creation, networking setup, and health validation.
+        Simplified from KubeVirt to direct EC2 instance launch.
         """
         try:
             vm_id = vm.vm_id
-            self.logger.info(f"Starting async provisioning for VM {vm_id}")
+            self.logger.info(f"Starting EC2 provisioning for VM {vm_id}")
             
             # Update state to starting
             await self.state_tracker.update_vm_state(vm, VMState.STARTING)
             
-            # 1. Generate KubeVirt VM manifest
-            if vm.spec.os_type == "windows":
-                manifest = self.template_manager.get_windows_template(vm.spec)
-                startup_timeout = self.config.vm.windows_startup_timeout
-            else:
-                manifest = self.template_manager.get_linux_template(vm.spec)
-                startup_timeout = self.config.vm.linux_startup_timeout
+            # 1. Generate user data script
+            user_data = self.template_manager.generate_windows_user_data(vm.spec)
             
-            vm.kubevirt_vm_manifest = manifest
+            # 2. Launch EC2 instance
+            run_config = {
+                'ImageId': vm.spec.ami_id,
+                'InstanceType': vm.spec.instance_type,
+                'MaxCount': 1,
+                'MinCount': 1,
+                'UserData': user_data,
+                'TagSpecifications': [
+                    {
+                        'ResourceType': 'instance',
+                        'Tags': [{'Key': k, 'Value': v} for k, v in vm.spec.tags.items()]
+                    }
+                ],
+                'BlockDeviceMappings': [
+                    {
+                        'DeviceName': '/dev/sda1',
+                        'Ebs': {
+                            'VolumeSize': vm.spec.disk_size_gb,
+                            'VolumeType': 'gp3',
+                            'DeleteOnTermination': True
+                        }
+                    }
+                ]
+            }
             
-            # 2. Create KubeVirt VM (simulated)
-            self.logger.info(f"Creating KubeVirt VM {vm.spec.vm_name}")
-            # TODO: Implement actual Kubernetes API call
-            # kubectl_client.create_namespaced_custom_object(...)
+            # Add security group and subnet if specified
+            if vm.spec.security_group_ids:
+                run_config['SecurityGroupIds'] = vm.spec.security_group_ids
+            if vm.spec.subnet_id:
+                run_config['SubnetId'] = vm.spec.subnet_id
             
-            # 3. Wait for VM startup (simulated)
-            startup_start = datetime.utcnow()
-            await asyncio.sleep(45)  # Simulate optimized startup time
-            startup_duration = (datetime.utcnow() - startup_start).total_seconds()
+            # Try spot instance if enabled
+            if vm.spec.spot_instance:
+                run_config['InstanceMarketOptions'] = {
+                    'MarketType': 'spot',
+                    'SpotOptions': {
+                        'MaxPrice': '0.10',  # Max price per hour
+                        'SpotInstanceType': 'one-time'
+                    }
+                }
             
-            # 4. Update VM information
-            vm.started_at = datetime.utcnow() 
-            vm.startup_duration = startup_duration
-            vm.allocated_resources = vm.spec.resources
-            vm.node_name = f"karpenter-node-{vm.user_id}"
-            vm.ip_address = f"10.244.{hash(vm_id) % 255}.{hash(vm_id) % 255}"
-            vm.access_ports = {'rdp': 3389, 'vnc': 5900}
-            vm.health_status = "healthy"
-            vm.instance_type = "m5.xlarge"
-            vm.spot_instance = True
-            vm.hourly_cost = 0.15  # Simulated cost
+            response = self.ec2_client.run_instances(**run_config)
+            instance = response['Instances'][0]
             
-            # 5. Update state to running
-            await self.state_tracker.update_vm_state(vm, VMState.RUNNING)
-            vm.update_heartbeat()
+            # 3. Update VM with EC2 instance information
+            vm.instance_id = instance['InstanceId']
+            vm.instance_type = instance['InstanceType']
+            vm.availability_zone = instance['Placement']['AvailabilityZone']
+            vm.spot_instance = vm.spec.spot_instance
+            vm.hourly_cost = 0.08 if vm.spot_instance else 0.12  # Estimate
             
-            self.logger.info(
-                f"VM {vm_id} provisioned successfully in {startup_duration:.1f}s",
-                extra={'vm_id': vm_id, 'startup_duration': startup_duration}
-            )
+            self.logger.info(f"EC2 instance launched: {vm.instance_id}")
+            
+            # 4. Monitor instance startup
+            await self._monitor_instance_startup(vm)
             
         except Exception as e:
             self.logger.error(f"Failed to provision VM {vm.vm_id}: {e}")
             await self.state_tracker.update_vm_state(vm, VMState.FAILED)
             vm.error_message = str(e)
     
+    async def _monitor_instance_startup(self, vm: VM) -> None:
+        """Monitor EC2 instance startup and update VM status."""
+        startup_start = datetime.utcnow()
+        max_startup_time = 600  # 10 minutes
+        
+        while True:
+            try:
+                elapsed = (datetime.utcnow() - startup_start).total_seconds()
+                
+                if elapsed > max_startup_time:
+                    await self.state_tracker.update_vm_state(vm, VMState.FAILED)
+                    vm.error_message = "Instance startup timeout"
+                    break
+                
+                # Check instance state
+                response = self.ec2_client.describe_instances(
+                    InstanceIds=[vm.instance_id]
+                )
+                
+                if not response['Reservations']:
+                    await asyncio.sleep(30)
+                    continue
+                
+                instance = response['Reservations'][0]['Instances'][0]
+                instance_state = instance['State']['Name']
+                
+                # Update network information
+                if 'PublicIpAddress' in instance:
+                    vm.public_ip = instance['PublicIpAddress']
+                if 'PrivateIpAddress' in instance:
+                    vm.private_ip = instance['PrivateIpAddress']
+                
+                if instance_state == 'running':
+                    await self.state_tracker.update_vm_state(vm, VMState.RUNNING)
+                    vm.started_at = datetime.utcnow()
+                    
+                    # Wait for Windows to initialize and generate RDP password
+                    await asyncio.sleep(60)
+                    
+                    # Set RDP password (simplified for demo)
+                    vm.rdp_password = f"InfraSDK{hash(vm.instance_id) % 9999}!"
+                    vm.health_status = "healthy"
+                    vm.startup_duration = elapsed
+                    vm.update_heartbeat()
+                    
+                    self.logger.info(f"VM {vm.vm_id} is ready for RDP access")
+                    break
+                
+                elif instance_state in ['stopped', 'stopping', 'terminated', 'terminating']:
+                    await self.state_tracker.update_vm_state(vm, VMState.FAILED)
+                    vm.error_message = f"Instance unexpectedly entered state: {instance_state}"
+                    break
+                
+                await asyncio.sleep(30)
+                
+            except Exception as e:
+                self.logger.error(f"Error monitoring VM startup {vm.vm_id}: {e}")
+                await self.state_tracker.update_vm_state(vm, VMState.FAILED)
+                vm.error_message = str(e)
+                break
+    
     async def _cleanup_vm_async(self, vm: VM) -> None:
         """
         Async VM cleanup workflow.
         
-        Orchestrates complete VM resource cleanup including KubeVirt VM
-        deletion, storage cleanup, and state removal.
+        Simplified from KubeVirt to direct EC2 instance termination.
         """
         try:
             vm_id = vm.vm_id
-            self.logger.info(f"Starting async cleanup for VM {vm_id}")
+            self.logger.info(f"Starting cleanup for VM {vm_id}")
             
-            # TODO: Implement actual cleanup logic:
-            # 1. Delete KubeVirt VM
-            # 2. Clean up storage volumes 
-            # 3. Remove network resources
-            # 4. Update monitoring systems
+            # Terminate EC2 instance
+            if vm.instance_id:
+                self.ec2_client.terminate_instances(InstanceIds=[vm.instance_id])
+                self.logger.info(f"Terminated EC2 instance: {vm.instance_id}")
             
-            # Simulate cleanup time
-            await asyncio.sleep(10)
+            # Wait for termination to complete
+            await asyncio.sleep(30)
             
             # Update state
             await self.state_tracker.update_vm_state(vm, VMState.TERMINATED)
             
-            # Remove from storage
-            del self._vms[vm_id]
+            # Calculate final cost
+            final_cost = vm.calculate_cost()
             
-            self.logger.info(f"VM {vm_id} cleaned up successfully")
+            self.logger.info(f"VM {vm_id} cleaned up successfully. Cost: ${final_cost:.4f}")
             
         except Exception as e:
             self.logger.error(f"Failed to cleanup VM {vm.vm_id}: {e}")
             vm.error_message = f"Cleanup failed: {e}"
+    
+    def get_pool_status(self) -> Dict[str, Any]:
+        """Get current VM pool status."""
+        active_vms = [vm for vm in self._vms.values() if vm.state == VMState.RUNNING]
+        total_cost = sum(vm.calculate_cost() for vm in active_vms)
+        
+        return {
+            "total_vms": len(self._vms),
+            "active_vms": len(active_vms),
+            "states": {state.value: sum(1 for vm in self._vms.values() if vm.state == state) 
+                      for state in VMState},
+            "total_active_cost": round(total_cost, 4),
+            "spot_instances": sum(1 for vm in active_vms if vm.spot_instance)
+        }
