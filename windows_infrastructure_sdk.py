@@ -408,7 +408,7 @@ class EC2WindowsManager:
     
     def _generate_user_data_script(self, user_id: str, session_id: str) -> str:
         """
-        Generate PowerShell user data script for Windows VM initialization.
+        Generate PowerShell user data script for Windows VM initialization with TightVNC.
         
         Args:
             user_id: User identifier
@@ -417,11 +417,22 @@ class EC2WindowsManager:
         Returns:
             Base64 encoded PowerShell script
         """
+        # Get VNC configuration from config
+        vnc_password = self.config.get('tightvnc', {}).get('password', 'VNCPass123!')
+        vnc_port = self.config.get('tightvnc', {}).get('port', 5900)
+        vnc_geometry = self.config.get('tightvnc', {}).get('geometry', '1920x1080')
+        
         script = f"""<powershell>
-# Windows VM Initialization Script
+# Windows VM Initialization Script with TightVNC Support
 Write-Host "Starting Windows VM initialization for user {user_id}"
 
-# Enable RDP
+# Create directories
+New-Item -ItemType Directory -Path "C:\\temp" -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path "C:\\UserSessions\\{user_id}\\{session_id}" -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path "C:\\VNC" -Force -ErrorAction SilentlyContinue
+
+# Enable RDP (fallback remote access)
+Write-Host "Configuring RDP access..."
 Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -name "fDenyTSConnections" -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
@@ -433,24 +444,164 @@ Set-LocalUser -Name "Administrator" -Password $SecurePassword
 # Write password to file for SDK retrieval
 $Password | Out-File -FilePath C:\\temp\\rdp_password.txt -Encoding ASCII
 
-# Create user session directory
-New-Item -ItemType Directory -Path "C:\\UserSessions\\{user_id}\\{session_id}" -Force
+# Download and Install TightVNC Server
+Write-Host "Downloading TightVNC Server..."
+$TightVNCUrl = "https://www.tightvnc.com/download/2.8.27/tightvnc-2.8.27-gpl-setup-64bit.msi"
+$TightVNCPath = "C:\\temp\\tightvnc-setup.msi"
 
-# Install software (optional)
-# chocolatey, browsers, development tools can be added here
+try {{
+    # Download TightVNC installer
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    Invoke-WebRequest -Uri $TightVNCUrl -OutFile $TightVNCPath -UseBasicParsing
+    
+    Write-Host "Installing TightVNC Server..."
+    # Silent install with custom configuration
+    $InstallArgs = @(
+        "/i", $TightVNCPath,
+        "/quiet", "/norestart",
+        "ADDLOCAL=Server",
+        "SERVER_REGISTER_AS_SERVICE=1",
+        "SERVER_ADD_FIREWALL_EXCEPTION=1",
+        "SERVER_ALLOW_SAS=1",
+        "SET_USEVNCAUTHENTICATION=1",
+        "VALUE_OF_USEVNCAUTHENTICATION=1",
+        "SET_PASSWORD=1",
+        "VALUE_OF_PASSWORD={vnc_password}",
+        "SET_VIEWONLYPASSWORD=1",
+        "VALUE_OF_VIEWONLYPASSWORD=readonly123",
+        "SET_USEAUTHENTICATION=1",
+        "VALUE_OF_USEAUTHENTICATION=1"
+    )
+    
+    Start-Process -FilePath "msiexec.exe" -ArgumentList $InstallArgs -Wait -NoNewWindow
+    
+    Write-Host "TightVNC Server installed successfully"
+    
+    # Configure TightVNC Server
+    Write-Host "Configuring TightVNC Server..."
+    
+    # Create TightVNC registry configuration
+    $VNCRegPath = "HKLM:\\SOFTWARE\\TightVNC\\Server"
+    
+    # Set VNC server configuration
+    Set-ItemProperty -Path $VNCRegPath -Name "RfbPort" -Value {vnc_port} -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $VNCRegPath -Name "HttpPort" -Value 5800 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $VNCRegPath -Name "Password" -Value (ConvertTo-SecureString -String "{vnc_password}" -AsPlainText -Force | ConvertFrom-SecureString) -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $VNCRegPath -Name "AlwaysShared" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $VNCRegPath -Name "NeverShared" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $VNCRegPath -Name "DisconnectAction" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $VNCRegPath -Name "AcceptRfbConnections" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+    
+    # Configure Windows Firewall for VNC
+    Write-Host "Configuring Windows Firewall for VNC..."
+    New-NetFirewallRule -DisplayName "TightVNC Server" -Direction Inbound -Protocol TCP -LocalPort {vnc_port} -Action Allow -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName "TightVNC HTTP" -Direction Inbound -Protocol TCP -LocalPort 5800 -Action Allow -ErrorAction SilentlyContinue
+    
+    # Start TightVNC Server service
+    Write-Host "Starting TightVNC Server service..."
+    Start-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue
+    Set-Service -Name "TightVNC Server" -StartupType Automatic -ErrorAction SilentlyContinue
+    
+    # Verify service is running
+    $VNCService = Get-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue
+    if ($VNCService -and $VNCService.Status -eq "Running") {{
+        Write-Host "TightVNC Server service is running successfully"
+        $true | Out-File -FilePath "C:\\temp\\vnc_ready.txt" -Encoding ASCII
+    }} else {{
+        Write-Host "Warning: TightVNC Server service is not running"
+        $false | Out-File -FilePath "C:\\temp\\vnc_ready.txt" -Encoding ASCII
+    }}
+    
+}} catch {{
+    Write-Host "Error installing TightVNC: $($_.Exception.Message)"
+    $false | Out-File -FilePath "C:\\temp\\vnc_ready.txt" -Encoding ASCII
+}}
 
-# Set up monitoring
+# Install common software packages
+Write-Host "Installing common software packages..."
+try {{
+    # Install Chocolatey package manager
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    iex ((New-Object System.Net.WebClient).DownloadString('https://chocolatey.org/install.ps1'))
+    
+    # Install common applications via Chocolatey
+    $PackagesToInstall = @("googlechrome", "firefox", "notepadplusplus", "7zip")
+    foreach ($Package in $PackagesToInstall) {{
+        try {{
+            choco install $Package -y --no-progress --limit-output
+            Write-Host "Installed $Package successfully"
+        }} catch {{
+            Write-Host "Failed to install $Package`: $($_.Exception.Message)"
+        }}
+    }}
+    
+}} catch {{
+    Write-Host "Error setting up software packages: $($_.Exception.Message)"
+}}
+
+# Configure desktop environment
+Write-Host "Configuring desktop environment..."
+try {{
+    # Set desktop wallpaper and theme for better VNC experience
+    Set-ItemProperty -Path "HKCU:\\Control Panel\\Desktop" -Name "Wallpaper" -Value ""
+    Set-ItemProperty -Path "HKCU:\\Control Panel\\Colors" -Name "Background" -Value "0 78 212"  # Blue background
+    
+    # Disable Windows animations for better VNC performance
+    Set-ItemProperty -Path "HKCU:\\Control Panel\\Desktop" -Name "UserPreferencesMask" -Value @(144,18,3,128,16,0,0,0) -Type Binary
+    Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" -Name "ListviewAlphaSelect" -Value 0 -Type DWord
+    Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" -Name "TaskbarAnimations" -Value 0 -Type DWord
+    
+}} catch {{
+    Write-Host "Warning: Failed to configure desktop environment: $($_.Exception.Message)"
+}}
+
+# Set up monitoring and session tracking
+Write-Host "Setting up session monitoring..."
 $SessionInfo = @{{
     UserId = "{user_id}"
     SessionId = "{session_id}"
     StartTime = (Get-Date).ToString()
+    VNCPort = {vnc_port}
+    VNCPassword = "{vnc_password}"
+    RDPPassword = $Password
+    Geometry = "{vnc_geometry}"
 }} | ConvertTo-Json
-$SessionInfo | Out-File -FilePath "C:\\UserSessions\\session_info.json" -Encoding ASCII
 
-# Signal ready state
+$SessionInfo | Out-File -FilePath "C:\\UserSessions\\session_info.json" -Encoding ASCII
+$SessionInfo | Out-File -FilePath "C:\\temp\\session_info.json" -Encoding ASCII
+
+# Create health check script
+$HealthCheckScript = @"
+# VNC Health Check Script
+`$VNCService = Get-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue
+if (`$VNCService -and `$VNCService.Status -eq "Running") {{
+    "VNC_HEALTHY" | Out-File -FilePath "C:\\temp\\health_check.txt" -Encoding ASCII
+}} else {{
+    "VNC_UNHEALTHY" | Out-File -FilePath "C:\\temp\\health_check.txt" -Encoding ASCII
+}}
+"@
+
+$HealthCheckScript | Out-File -FilePath "C:\\temp\\health_check.ps1" -Encoding ASCII
+
+# Schedule health check to run every 5 minutes
+schtasks /create /tn "VNC Health Check" /tr "powershell.exe -File C:\\temp\\health_check.ps1" /sc minute /mo 5 /ru SYSTEM /f
+
+# Final system configuration
+Write-Host "Performing final system configuration..."
+
+# Disable Windows Update automatic restart
+Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU" -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Type DWord -ErrorAction SilentlyContinue
+
+# Set system to high performance mode
+powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+
+# Signal system ready state
 New-Item -ItemType File -Path "C:\\temp\\vm_ready.txt" -Force
 
-Write-Host "Windows VM initialization completed successfully"
+Write-Host "Windows VM initialization with TightVNC completed successfully"
+Write-Host "VNC Server available on port {vnc_port}"
+Write-Host "RDP available on port 3389"
 </powershell>"""
         
         # Base64 encode the script
