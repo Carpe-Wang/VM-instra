@@ -6,9 +6,9 @@
 aws:
   region: "us-west-2"
   # Credentials can be provided via environment variables or AWS profiles
-  # access_key_id: ""  # Set via AWS_ACCESS_KEY_ID
-  # secret_access_key: ""  # Set via AWS_SECRET_ACCESS_KEY
-  # profile: "default"  # Set via AWS_PROFILE
+  access_key_id: ""  # Set via AWS_ACCESS_KEY_ID
+  secret_access_key: ""  # Set via AWS_SECRET_ACCESS_KEY
+#  profile: "default"  # Set via AWS_PROFILE
   
   # EC2 Instance Configuration
   default_instance_types:

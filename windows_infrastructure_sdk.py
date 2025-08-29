@@ -9,8 +9,12 @@ that replaces the complex Kubernetes/KubeVirt architecture. It offers:
 - Dynamic scaling and cost optimization
 - Enterprise-grade security and monitoring
 - Simple deployment without Kubernetes complexity
+- AI Agent-friendly standardized interface
 
 Target Architecture: User Request → EC2 Windows Pool → RDP Connection → Cleanup
+
+AI Agent Integration:
+Use the VMAgentAdapter class for standardized, AI-friendly VM control operations.
 """
 
 import asyncio
@@ -838,3 +842,155 @@ Write-Host "RDP available on port 3389"
             "users_with_instances": len([uid for uid, iids in self._user_instances.items() if iids]),
             "spot_instances": sum(1 for i in active_instances if i.is_spot_instance)
         }
+
+
+# AI Agent Integration
+# Import VMAgentAdapter for AI-friendly interface
+try:
+    from vm_agent_adapter import VMAgentAdapter, ActionBuilder, create_ai_vm_session
+    _AGENT_ADAPTER_AVAILABLE = True
+except ImportError:
+    _AGENT_ADAPTER_AVAILABLE = False
+
+
+async def create_ai_friendly_vm(user_id: str, aws_region: str = "us-west-2") -> Optional['VMAgentAdapter']:
+    """
+    Create a VM session optimized for AI agent interaction.
+    
+    This is a convenience function that sets up the complete infrastructure
+    and returns a standardized VMAgentAdapter interface for AI agents.
+    
+    Args:
+        user_id: Unique identifier for the AI agent session
+        aws_region: AWS region to create VM in
+        
+    Returns:
+        VMAgentAdapter instance if successful, None otherwise
+        
+    Example:
+        # Create VM for AI agent
+        vm_adapter = await create_ai_friendly_vm("ai_agent_001")
+        
+        if vm_adapter:
+            # Take screenshot
+            screenshot = await vm_adapter.execute_action(ActionBuilder.screenshot())
+            
+            # Click on desktop
+            click_result = await vm_adapter.execute_action(ActionBuilder.click(500, 300))
+            
+            # Type text
+            type_result = await vm_adapter.execute_action(ActionBuilder.type_text("Hello AI!"))
+            
+            # Get VM state
+            state = await vm_adapter.get_vm_state()
+            print(f"VM State: {state.state.value}")
+            
+            # Cleanup when done
+            await vm_adapter.cleanup_session()
+    """
+    if not _AGENT_ADAPTER_AVAILABLE:
+        logging.error("VMAgentAdapter not available. Install vm_agent_adapter module.")
+        return None
+    
+    try:
+        # Create WindowsVMManager with default configuration
+        vm_manager = WindowsVMManager(aws_region=aws_region)
+        
+        # Create EC2PoolManager (this would normally come from configuration)
+        from infrastructure_sdk.config import InfraSDKConfig
+        config = InfraSDKConfig.from_dotenv()
+        from ec2_pool_manager import EC2PoolManager
+        
+        pool_manager = EC2PoolManager(config)
+        
+        # Create AI-friendly VM session
+        return await create_ai_vm_session(user_id, pool_manager)
+        
+    except Exception as e:
+        logging.error(f"Failed to create AI-friendly VM: {e}")
+        return None
+
+
+def get_ai_action_examples() -> Dict[str, str]:
+    """
+    Get example code snippets for common AI agent VM operations.
+    
+    Returns:
+        Dictionary of operation names to code examples
+    """
+    return {
+        "basic_setup": """
+# Basic VM setup for AI agent
+vm_adapter = await create_ai_friendly_vm("my_ai_agent")
+
+if vm_adapter:
+    # VM is ready for AI control
+    state = await vm_adapter.get_vm_state()
+    print(f"VM ready: {state.state.value}")
+""",
+        
+        "mouse_operations": """
+# Mouse operations
+await vm_adapter.execute_action(ActionBuilder.click(100, 200))
+await vm_adapter.execute_action(ActionBuilder.double_click(300, 400))  
+await vm_adapter.execute_action(ActionBuilder.right_click(500, 600))
+""",
+        
+        "keyboard_operations": """
+# Keyboard operations
+await vm_adapter.execute_action(ActionBuilder.type_text("Hello from AI!"))
+await vm_adapter.execute_action(ActionBuilder.hotkey("ctrl", "c"))
+await vm_adapter.execute_action(ActionBuilder.hotkey("win", "r"))
+""",
+        
+        "screen_capture": """
+# Screen capture and analysis
+screenshot_result = await vm_adapter.execute_action(ActionBuilder.screenshot())
+
+if screenshot_result.success:
+    screenshot_data = screenshot_result.return_data
+    # Process screenshot with computer vision
+    # analyze_screenshot(screenshot_data)
+""",
+        
+        "state_monitoring": """
+# VM state monitoring
+state = await vm_adapter.get_vm_state()
+
+print(f"State: {state.state.value}")
+print(f"Connection: {state.connection_quality}")
+print(f"Performance: {state.performance_metrics}")
+
+# Wait for specific condition
+success = await vm_adapter.wait_for_condition(
+    lambda: check_if_application_loaded(),
+    timeout_seconds=30
+)
+""",
+        
+        "error_handling": """
+# Robust error handling
+result = await vm_adapter.execute_action(ActionBuilder.click(x, y))
+
+if result.success:
+    print(f"Action completed in {result.execution_time_ms}ms")
+else:
+    print(f"Action failed: {result.error_message}")
+    
+    # Check VM state
+    state = await vm_adapter.get_vm_state()
+    if state.state == VMState.ERROR:
+        # Handle error condition
+        await vm_adapter.cleanup_session()
+""",
+        
+        "cleanup": """
+# Always cleanup when done
+try:
+    # Do AI agent work...
+    pass
+finally:
+    if vm_adapter:
+        await vm_adapter.cleanup_session()
+"""
+    }
