@@ -1,0 +1,80 @@
+# Infrastructure SDK Python Dependencies
+# Core Python SDK for VM-Based User Isolation and Lifecycle Management
+
+# Core async and data handling
+asyncio-throttle==1.0.2
+aiofiles==23.2.1
+pydantic==2.5.3
+dataclasses-json==0.6.3
+
+# Kubernetes client library
+kubernetes==28.1.0
+kubernetes-asyncio==24.2.3
+
+# KubeVirt Python client (if available, otherwise use kubernetes client)
+# kubevirt-python-client>=0.1.0
+
+# AWS SDK for Python
+boto3==1.34.34
+botocore==1.34.34
+aiobotocore==2.11.2
+
+# Configuration management
+PyYAML==6.0.1
+python-dotenv==1.0.0
+
+# HTTP clients for API interactions
+httpx==0.26.0
+aiohttp==3.9.1
+
+# Data validation and serialization
+marshmallow==3.20.2
+marshmallow-dataclass==8.6.0
+
+# Logging and monitoring
+structlog==23.2.0
+prometheus-client==0.19.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-prometheus==1.12.0rc1
+
+# Date and time handling
+python-dateutil==2.8.2
+pytz==2023.4
+
+# Cryptography and security
+cryptography==41.0.8
+bcrypt==4.1.2
+
+# Development and testing dependencies
+# (These would typically be in requirements-dev.txt in production)
+pytest==7.4.4
+pytest-asyncio==0.23.2
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
+isort==5.13.2
+
+# Type hints and stubs
+types-PyYAML==6.0.12.12
+types-python-dateutil==2.8.19.14
+types-requests==2.31.0.10
+
+# Optional dependencies for enhanced functionality
+# Redis for caching and session state (optional)
+redis==5.0.1
+aioredis==2.0.1
+
+# PostgreSQL adapter for persistent storage (optional)
+asyncpg==0.29.0
+sqlalchemy==2.0.25
+alembic==1.13.1
+
+# Metrics and monitoring (optional)
+grafana-client==3.3.0
+
+# Cost optimization and AWS pricing (optional)
+pandas==2.1.4
+numpy==1.26.2
