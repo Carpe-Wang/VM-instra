@@ -438,3 +438,27 @@ class InfraSDKConfig:
             config['profile_name'] = self.aws.profile
             
         return config
+    
+    def get(self, key: str, default=None):
+        """Dictionary-style access for backward compatibility."""
+        # Map common keys to config attributes
+        mapping = {
+            'aws_region': self.aws.region,
+            'aws_access_key_id': self.aws.access_key_id,
+            'aws_secret_access_key': self.aws.secret_access_key,
+            'min_pool_size': 2,
+            'max_pool_size': self.cost_optimization.max_concurrent_instances,
+            'target_utilization': 75.0,
+            'max_vnc_connections': 20,
+            'vnc_port': 5900,
+            'vnc_password': None,
+            'vnc_target_fps': 18,
+            'vnc_quality': 6,
+            'vnc_compression': 6,
+            'vnc_connection_timeout': 30,
+            'vnc_authentication': True
+        }
+        
+        if key in mapping:
+            return mapping[key]
+        return default
