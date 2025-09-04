@@ -3,7 +3,7 @@
 VM Agent Adapter - Standardized Interface for AI Agents
 
 This module provides a standardized interface for AI agents to interact with Windows VMs
-without needing to understand the underlying VNC/EC2 implementation details.
+without needing to understand the underlying RDP/EC2 implementation details.
 
 The adapter focuses on:
 - Standard action execution
@@ -27,7 +27,7 @@ from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Callable
 from datetime import datetime, timedelta
 
-from vnc_controller import TightVNCController
+from rdp_controller import RDPController
 from ec2_pool_manager import EC2PoolManager, UserSession
 
 
@@ -96,7 +96,7 @@ class VMAgentAdapter:
     Standardized adapter interface for AI agents to control Windows VMs.
     
     This class provides a clean, standardized interface that AI agents can use
-    without needing to understand VNC protocols or EC2 management details.
+    without needing to understand RDP protocols or EC2 management details.
     """
     
     def __init__(self, pool_manager: Optional[EC2PoolManager] = None):
@@ -106,7 +106,7 @@ class VMAgentAdapter:
         
         # Current session state
         self.current_session: Optional[UserSession] = None
-        self.vnc_controller: Optional[TightVNCController] = None
+        self.rdp_controller: Optional[RDPController] = None
         self.vm_state = VMState.UNKNOWN
         
         # Performance tracking
@@ -147,13 +147,15 @@ class VMAgentAdapter:
                 self.logger.error(f"Failed to allocate VM instance for user {user_id}")
                 return False
             
-            # Initialize VNC controller
-            self.vnc_controller = TightVNCController(
-                host=self.current_session.public_ip,
-                port=5900,  # Default VNC port
-                password=self.current_session.vnc_password if hasattr(self.current_session, 'vnc_password') else None
+            # Initialize RDP controller
+            # Get RDP connection from pool manager
+            self.rdp_controller = await self.pool_manager.get_rdp_connection(
+                user_id=user_id,
+                session_id=self.current_session.session_id
             )
-            await self.vnc_controller.connect()
+            
+            if not self.rdp_controller:
+                raise Exception("Failed to establish RDP connection")
             
             # Update state
             await self._update_vm_state(VMState.READY)
@@ -340,10 +342,13 @@ class VMAgentAdapter:
         try:
             self.logger.info("Cleaning up VM session")
             
-            # Disconnect VNC
-            if self.vnc_controller:
-                await self.vnc_controller.disconnect()
-                self.vnc_controller = None
+            # Disconnect RDP
+            if self.rdp_controller and self.current_session:
+                await self.pool_manager.release_rdp_connection(
+                    user_id=self.current_session.user_id,
+                    session_id=self.current_session.session_id
+                )
+                self.rdp_controller = None
             
             # Release VM instance
             if self.pool_manager and self.current_session:
@@ -365,7 +370,7 @@ class VMAgentAdapter:
     def _is_session_valid(self) -> bool:
         """Check if current session is valid and connected."""
         return (self.current_session is not None and 
-                self.vnc_controller is not None and
+                self.rdp_controller is not None and
                 self.vm_state not in [VMState.ERROR, VMState.DISCONNECTED])
     
     async def _update_vm_state(self, new_state: VMState):
@@ -429,7 +434,7 @@ class VMAgentAdapter:
         if x is None or y is None:
             raise ValueError("Mouse click requires x and y coordinates")
         
-        return await self.vnc_controller.send_mouse_click(x, y, button)
+        return await self.rdp_controller.send_mouse_click(x, y, button)
     
     async def _execute_mouse_double_click(self, params: Dict[str, Any]) -> bool:
         """Execute mouse double click action."""
@@ -440,9 +445,9 @@ class VMAgentAdapter:
             raise ValueError("Mouse double click requires x and y coordinates")
         
         # Double click by sending two rapid clicks
-        await self.vnc_controller.send_mouse_click(x, y, 'left')
+        await self.rdp_controller.send_mouse_click(x, y, 'left')
         await asyncio.sleep(0.1)
-        return await self.vnc_controller.send_mouse_click(x, y, 'left')
+        return await self.rdp_controller.send_mouse_click(x, y, 'left')
     
     async def _execute_mouse_right_click(self, params: Dict[str, Any]) -> bool:
         """Execute mouse right click action."""
@@ -452,7 +457,7 @@ class VMAgentAdapter:
         if x is None or y is None:
             raise ValueError("Mouse right click requires x and y coordinates")
         
-        return await self.vnc_controller.send_mouse_click(x, y, 'right')
+        return await self.rdp_controller.send_mouse_click(x, y, 'right')
     
     async def _execute_mouse_drag(self, params: Dict[str, Any]) -> bool:
         """Execute mouse drag action."""
@@ -465,10 +470,10 @@ class VMAgentAdapter:
             raise ValueError("Mouse drag requires start_x, start_y, end_x, end_y coordinates")
         
         # Implement drag as move + click + move + release
-        await self.vnc_controller.send_mouse_move(start_x, start_y)
-        await self.vnc_controller.send_mouse_click(start_x, start_y, 'left')
-        await self.vnc_controller.send_mouse_move(end_x, end_y)
-        # Note: TightVNCController may need mouse release method
+        await self.rdp_controller.send_mouse_move(start_x, start_y)
+        await self.rdp_controller.send_mouse_click(start_x, start_y, 'left')
+        await self.rdp_controller.send_mouse_move(end_x, end_y)
+        # Note: RDPController may need mouse release method
         return True
     
     async def _execute_keyboard_type(self, params: Dict[str, Any]) -> bool:
@@ -477,7 +482,7 @@ class VMAgentAdapter:
         if not text:
             raise ValueError("Keyboard type requires text parameter")
         
-        return await self.vnc_controller.send_key_sequence(text)
+        return await self.rdp_controller.send_key_sequence(text)
     
     async def _execute_keyboard_hotkey(self, params: Dict[str, Any]) -> bool:
         """Execute keyboard hotkey combination."""
@@ -487,7 +492,7 @@ class VMAgentAdapter:
         
         # Convert key combination to string
         key_combo = "+".join(keys)
-        return await self.vnc_controller.send_key_sequence(key_combo)
+        return await self.rdp_controller.send_key_sequence(key_combo)
     
     async def _execute_screen_capture(self, params: Dict[str, Any]) -> bytes:
         """Execute screen capture action."""
@@ -497,7 +502,7 @@ class VMAgentAdapter:
             return self.last_screenshot
         
         # Capture new screenshot
-        screenshot_data = await self.vnc_controller.capture_screenshot()
+        screenshot_data = await self.rdp_controller.capture_screenshot()
         
         # Update cache
         self.last_screenshot = screenshot_data

@@ -359,7 +359,7 @@ async def main():
     print("\n🎯 Demo Summary:")
     print("The VMAgentAdapter provides a clean, standardized interface")
     print("that allows AI agents to control Windows VMs without needing")
-    print("to understand VNC protocols or EC2 management details.")
+    print("to understand RDP protocols or EC2 management details.")
     print()
     print("Key benefits for AI agents:")
     print("✅ Simple action-based interface")
