@@ -27,9 +27,9 @@ from windows_infrastructure_sdk import (
     UserIsolationPolicy, VMState
 )
 
-from vnc_controller import (
-    TightVNCController, VNCConnectionConfig, VNCConnectionPool,
-    VNCState, create_vnc_config, test_vnc_connectivity
+from rdp_controller import (
+    RDPController, RDPConnectionConfig, RDPConnectionPool,
+    RDPState, create_rdp_config, test_rdp_connectivity
 )
 
 
@@ -112,12 +112,13 @@ class UserSession:
     last_activity: datetime
     session_timeout_minutes: int = 480  # 8 hours default
     
-    # VNC connection details
-    vnc_host: Optional[str] = None
-    vnc_port: int = 5900
-    vnc_password: Optional[str] = None
-    vnc_ready: bool = False
-    vnc_controller: Optional[TightVNCController] = None
+    # RDP connection details
+    rdp_host: Optional[str] = None
+    rdp_port: int = 3389
+    rdp_username: str = "Administrator"
+    rdp_password: Optional[str] = None
+    rdp_ready: bool = False
+    rdp_controller: Optional[RDPController] = None
     
     def is_expired(self) -> bool:
         """Check if session has expired."""
@@ -172,24 +173,25 @@ class EC2PoolManager:
             target_utilization=config.get('target_utilization', 75.0)
         )
         
-        # VNC connection management
-        self.vnc_pool = VNCConnectionPool(max_connections=config.get('max_vnc_connections', 20))
-        self.vnc_config = {
-            'default_port': config.get('vnc_port', 5900),
-            'default_password': config.get('vnc_password'),
-            'target_fps': config.get('vnc_target_fps', 18),
-            'quality': config.get('vnc_quality', 6),
-            'compression': config.get('vnc_compression', 6),
-            'connect_timeout': config.get('vnc_connect_timeout', 30)
+        # RDP connection management
+        self.rdp_pool = RDPConnectionPool(max_connections=config.get('max_rdp_connections', 20))
+        self.rdp_config = {
+            'default_port': config.get('rdp_port', 3389),
+            'default_username': config.get('rdp_username', 'Administrator'),
+            'target_fps': config.get('rdp_target_fps', 20),
+            'color_depth': config.get('rdp_color_depth', 32),
+            'resolution': config.get('rdp_resolution', (1920, 1080)),
+            'compression': config.get('rdp_compression', True),
+            'connect_timeout': config.get('rdp_connect_timeout', 30)
         }
         
         # Background tasks
         self._scaling_task: Optional[asyncio.Task] = None
         self._monitoring_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
-        self._vnc_monitoring_task: Optional[asyncio.Task] = None
+        self._rdp_monitoring_task: Optional[asyncio.Task] = None
         
-        self.logger.info("EC2 Pool Manager with VNC integration initialized")
+        self.logger.info("EC2 Pool Manager with RDP integration initialized")
     
     async def start_pool_management(self) -> None:
         """Start background pool management tasks."""
@@ -199,7 +201,7 @@ class EC2PoolManager:
         self._scaling_task = asyncio.create_task(self._scaling_loop())
         self._monitoring_task = asyncio.create_task(self._monitoring_loop())
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-        self._vnc_monitoring_task = asyncio.create_task(self._vnc_monitoring_loop())
+        self._rdp_monitoring_task = asyncio.create_task(self._rdp_monitoring_loop())
         
         # Initialize warm pool
         await self._ensure_warm_pool()
@@ -208,7 +210,7 @@ class EC2PoolManager:
         """Stop background pool management tasks."""
         self.logger.info("Stopping pool management tasks")
         
-        tasks = [self._scaling_task, self._monitoring_task, self._cleanup_task, self._vnc_monitoring_task]
+        tasks = [self._scaling_task, self._monitoring_task, self._cleanup_task, self._rdp_monitoring_task]
         for task in tasks:
             if task:
                 task.cancel()
@@ -217,8 +219,8 @@ class EC2PoolManager:
                 except asyncio.CancelledError:
                     pass
         
-        # Shutdown VNC connection pool
-        await self.vnc_pool.shutdown_pool()
+        # Shutdown RDP connection pool
+        await self.rdp_pool.shutdown_pool()
     
     async def request_instance(self, user_id: str, resource_spec: EC2ResourceSpec,
                              isolation_policy: UserIsolationPolicy,
@@ -274,8 +276,8 @@ class EC2PoolManager:
             self.user_sessions[session_id] = user_session
             self.assigned_instances[instance.instance_id] = user_id
             
-            # Initialize VNC connection for the instance
-            await self._setup_vnc_connection(user_session, instance)
+            # Initialize RDP connection for the instance
+            await self._setup_rdp_connection(user_session, instance)
             
             self.logger.info(f"Created new instance {instance.instance_id} for user {user_id}")
             return instance
@@ -696,51 +698,52 @@ class EC2PoolManager:
             # No warm instances available, trigger scale up
             await self._scale_up()
     
-    # VNC Integration Methods
+    # RDP Integration Methods
     
-    async def _setup_vnc_connection(self, user_session: UserSession, instance: WindowsInstance) -> None:
+    async def _setup_rdp_connection(self, user_session: UserSession, instance: WindowsInstance) -> None:
         """
-        Setup VNC connection for a user session.
+        Setup RDP connection for a user session.
         
         Args:
-            user_session: User session to setup VNC for
+            user_session: User session to setup RDP for
             instance: Windows instance to connect to
         """
         try:
-            # Get instance public IP for VNC connection
-            vnc_host = instance.public_ip or instance.private_ip
-            if not vnc_host:
-                self.logger.error(f"No IP address available for VNC connection: {instance.instance_id}")
+            # Get instance public IP for RDP connection
+            rdp_host = instance.public_ip or instance.private_ip
+            if not rdp_host:
+                self.logger.error(f"No IP address available for RDP connection: {instance.instance_id}")
                 return
             
-            # Update user session with VNC details
-            user_session.vnc_host = vnc_host
-            user_session.vnc_port = self.vnc_config['default_port']
-            user_session.vnc_password = self._generate_vnc_password(user_session.user_id)
+            # Update user session with RDP details
+            user_session.rdp_host = rdp_host
+            user_session.rdp_port = self.rdp_config['default_port']
+            user_session.rdp_username = instance.rdp_username
+            user_session.rdp_password = instance.rdp_password  # Retrieved from instance
             
-            # Wait for VNC service to be ready on the instance
-            vnc_ready = await self._wait_for_vnc_ready(vnc_host, user_session.vnc_port, timeout_seconds=300)
-            user_session.vnc_ready = vnc_ready
+            # Wait for RDP service to be ready on the instance
+            rdp_ready = await self._wait_for_rdp_ready(rdp_host, user_session.rdp_port, timeout_seconds=300)
+            user_session.rdp_ready = rdp_ready
             
-            if vnc_ready:
-                self.logger.info(f"VNC ready for instance {instance.instance_id} at {vnc_host}:{user_session.vnc_port}")
+            if rdp_ready:
+                self.logger.info(f"RDP ready for instance {instance.instance_id} at {rdp_host}:{user_session.rdp_port}")
             else:
-                self.logger.warning(f"VNC not ready for instance {instance.instance_id}")
+                self.logger.warning(f"RDP not ready for instance {instance.instance_id}")
                 
         except Exception as e:
-            self.logger.error(f"Failed to setup VNC connection: {e}")
+            self.logger.error(f"Failed to setup RDP connection: {e}")
     
-    async def _wait_for_vnc_ready(self, host: str, port: int, timeout_seconds: int = 300) -> bool:
+    async def _wait_for_rdp_ready(self, host: str, port: int, timeout_seconds: int = 300) -> bool:
         """
-        Wait for VNC service to be ready on the target host.
+        Wait for RDP service to be ready on the target host.
         
         Args:
-            host: VNC server host
-            port: VNC server port
+            host: RDP server host
+            port: RDP server port
             timeout_seconds: Maximum time to wait
             
         Returns:
-            bool: True if VNC service is ready
+            bool: True if RDP service is ready
         """
         start_time = time.time()
         
@@ -753,53 +756,50 @@ class EC2PoolManager:
                 sock.close()
                 
                 if result == 0:
-                    # Port is open, test VNC connectivity
-                    vnc_ready = await test_vnc_connectivity(host, port)
-                    if vnc_ready:
+                    # Port is open, test RDP connectivity
+                    rdp_ready = await test_rdp_connectivity(host, port)
+                    if rdp_ready:
                         return True
                 
                 await asyncio.sleep(10)  # Wait 10 seconds before retry
                 
             except Exception as e:
-                self.logger.debug(f"VNC connectivity check failed: {e}")
+                self.logger.debug(f"RDP connectivity check failed: {e}")
                 await asyncio.sleep(10)
         
         return False
     
-    def _generate_vnc_password(self, user_id: str) -> str:
+    def _generate_rdp_password(self, user_id: str) -> str:
         """
-        Generate VNC password for user session.
+        Generate RDP password for user session.
         
         Args:
             user_id: User identifier
             
         Returns:
-            str: Generated VNC password
+            str: Generated RDP password
         """
-        # Use configured default password or generate one
-        if self.vnc_config['default_password']:
-            return self.vnc_config['default_password']
-        
         # Generate a secure random password for the user
         import secrets
         import string
         
-        alphabet = string.ascii_letters + string.digits
-        password = ''.join(secrets.choice(alphabet) for _ in range(12))
+        # RDP requires more complex passwords
+        alphabet = string.ascii_letters + string.digits + "!@#$%"
+        password = ''.join(secrets.choice(alphabet) for _ in range(16))
         
-        # Cache password for this user (in production, use secure storage)
-        return password
+        # Ensure password meets Windows complexity requirements
+        return f"RDP{password}!"
     
-    async def get_vnc_connection(self, user_id: str, session_id: str) -> Optional[TightVNCController]:
+    async def get_rdp_connection(self, user_id: str, session_id: str) -> Optional[RDPController]:
         """
-        Get VNC connection for user session.
+        Get RDP connection for user session.
         
         Args:
             user_id: User identifier
             session_id: Session identifier
             
         Returns:
-            TightVNCController: VNC controller ready for use
+            RDPController: RDP controller ready for use
         """
         if session_id not in self.user_sessions:
             self.logger.error(f"Session not found: {session_id}")
@@ -807,42 +807,44 @@ class EC2PoolManager:
         
         user_session = self.user_sessions[session_id]
         
-        if not user_session.vnc_ready:
-            self.logger.error(f"VNC not ready for session: {session_id}")
+        if not user_session.rdp_ready:
+            self.logger.error(f"RDP not ready for session: {session_id}")
             return None
         
         # Check if controller already exists and is connected
-        if user_session.vnc_controller and user_session.vnc_controller.is_connected():
-            return user_session.vnc_controller
+        if user_session.rdp_controller and user_session.rdp_controller.is_connected():
+            return user_session.rdp_controller
         
         try:
-            # Create VNC configuration
-            vnc_config = create_vnc_config(
-                host=user_session.vnc_host,
-                port=user_session.vnc_port,
-                password=user_session.vnc_password,
-                target_fps=self.vnc_config['target_fps'],
-                quality=self.vnc_config['quality'],
-                compression=self.vnc_config['compression'],
-                connect_timeout=self.vnc_config['connect_timeout']
+            # Create RDP configuration
+            rdp_config = create_rdp_config(
+                host=user_session.rdp_host,
+                port=user_session.rdp_port,
+                username=user_session.rdp_username,
+                password=user_session.rdp_password,
+                target_fps=self.rdp_config['target_fps'],
+                color_depth=self.rdp_config['color_depth'],
+                resolution=self.rdp_config['resolution'],
+                compression=self.rdp_config['compression'],
+                connect_timeout=self.rdp_config['connect_timeout']
             )
             
             # Get connection from pool
-            controller = await self.vnc_pool.get_connection(vnc_config)
+            controller = await self.rdp_pool.get_connection(rdp_config)
             if controller:
-                user_session.vnc_controller = controller
+                user_session.rdp_controller = controller
                 user_session.last_activity = datetime.utcnow()
-                self.logger.info(f"VNC connection established for user {user_id}")
+                self.logger.info(f"RDP connection established for user {user_id}")
                 return controller
             
         except Exception as e:
-            self.logger.error(f"Failed to get VNC connection for user {user_id}: {e}")
+            self.logger.error(f"Failed to get RDP connection for user {user_id}: {e}")
         
         return None
     
-    async def release_vnc_connection(self, user_id: str, session_id: str) -> None:
+    async def release_rdp_connection(self, user_id: str, session_id: str) -> None:
         """
-        Release VNC connection for user session.
+        Release RDP connection for user session.
         
         Args:
             user_id: User identifier
@@ -853,58 +855,58 @@ class EC2PoolManager:
         
         user_session = self.user_sessions[session_id]
         
-        if user_session.vnc_controller:
-            connection_key = f"{user_session.vnc_host}:{user_session.vnc_port}"
-            await self.vnc_pool.release_connection(connection_key)
-            user_session.vnc_controller = None
+        if user_session.rdp_controller:
+            connection_key = f"{user_session.rdp_host}:{user_session.rdp_port}"
+            await self.rdp_pool.release_connection(connection_key)
+            user_session.rdp_controller = None
             
-            self.logger.info(f"Released VNC connection for user {user_id}")
+            self.logger.info(f"Released RDP connection for user {user_id}")
     
-    async def _vnc_monitoring_loop(self) -> None:
-        """Background task for monitoring VNC connections."""
+    async def _rdp_monitoring_loop(self) -> None:
+        """Background task for monitoring RDP connections."""
         while True:
             try:
-                await self._monitor_vnc_connections()
-                await self.vnc_pool.cleanup_idle_connections(idle_threshold_minutes=15)
+                await self._monitor_rdp_connections()
+                await self.rdp_pool.cleanup_idle_connections(idle_threshold_minutes=15)
                 await asyncio.sleep(120)  # Check every 2 minutes
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.error(f"Error in VNC monitoring loop: {e}")
+                self.logger.error(f"Error in RDP monitoring loop: {e}")
                 await asyncio.sleep(120)
     
-    async def _monitor_vnc_connections(self) -> None:
-        """Monitor and maintain VNC connections."""
+    async def _monitor_rdp_connections(self) -> None:
+        """Monitor and maintain RDP connections."""
         try:
             for session_id, user_session in self.user_sessions.items():
-                if user_session.vnc_ready and user_session.vnc_controller:
-                    # Check if VNC connection is still alive
-                    if not user_session.vnc_controller.is_connected():
-                        self.logger.warning(f"VNC connection lost for session {session_id}")
+                if user_session.rdp_ready and user_session.rdp_controller:
+                    # Check if RDP connection is still alive
+                    if not user_session.rdp_controller.is_connected():
+                        self.logger.warning(f"RDP connection lost for session {session_id}")
                         
                         # Try to reconnect
                         try:
-                            await user_session.vnc_controller.connect(retry_attempts=1)
+                            await user_session.rdp_controller.connect(retry_attempts=1)
                         except Exception as e:
-                            self.logger.error(f"VNC reconnection failed: {e}")
+                            self.logger.error(f"RDP reconnection failed: {e}")
                 
         except Exception as e:
-            self.logger.error(f"VNC connection monitoring failed: {e}")
+            self.logger.error(f"RDP connection monitoring failed: {e}")
     
-    def get_vnc_pool_status(self) -> Dict[str, Any]:
-        """Get VNC connection pool status."""
-        return self.vnc_pool.get_pool_status()
+    def get_rdp_pool_status(self) -> Dict[str, Any]:
+        """Get RDP connection pool status."""
+        return self.rdp_pool.get_pool_status()
     
-    async def test_instance_vnc(self, instance_id: str) -> Dict[str, Any]:
+    async def test_instance_rdp(self, instance_id: str) -> Dict[str, Any]:
         """
-        Test VNC connectivity for a specific instance.
+        Test RDP connectivity for a specific instance.
         
         Args:
-            instance_id: Instance to test VNC connectivity
+            instance_id: Instance to test RDP connectivity
             
         Returns:
-            dict: VNC test results
+            dict: RDP test results
         """
         # Find user session for instance
         user_session = None
@@ -913,35 +915,36 @@ class EC2PoolManager:
                 user_session = session
                 break
         
-        if not user_session or not user_session.vnc_ready:
+        if not user_session or not user_session.rdp_ready:
             return {
                 "instance_id": instance_id,
-                "vnc_ready": False,
-                "error": "Instance not found or VNC not ready"
+                "rdp_ready": False,
+                "error": "Instance not found or RDP not ready"
             }
         
         try:
-            # Create temporary VNC controller for testing
-            vnc_config = create_vnc_config(
-                host=user_session.vnc_host,
-                port=user_session.vnc_port,
-                password=user_session.vnc_password
+            # Create temporary RDP controller for testing
+            rdp_config = create_rdp_config(
+                host=user_session.rdp_host,
+                port=user_session.rdp_port,
+                username=user_session.rdp_username,
+                password=user_session.rdp_password
             )
             
-            controller = TightVNCController(vnc_config)
+            controller = RDPController(rdp_config)
             test_results = await controller.test_connection()
             
             return {
                 "instance_id": instance_id,
-                "vnc_host": user_session.vnc_host,
-                "vnc_port": user_session.vnc_port,
-                "vnc_ready": user_session.vnc_ready,
+                "rdp_host": user_session.rdp_host,
+                "rdp_port": user_session.rdp_port,
+                "rdp_ready": user_session.rdp_ready,
                 **test_results
             }
             
         except Exception as e:
             return {
                 "instance_id": instance_id,
-                "vnc_ready": False,
+                "rdp_ready": False,
                 "error": str(e)
             }

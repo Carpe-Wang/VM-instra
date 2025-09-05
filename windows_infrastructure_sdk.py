@@ -9,8 +9,12 @@ that replaces the complex Kubernetes/KubeVirt architecture. It offers:
 - Dynamic scaling and cost optimization
 - Enterprise-grade security and monitoring
 - Simple deployment without Kubernetes complexity
+- AI Agent-friendly standardized interface
 
 Target Architecture: User Request → EC2 Windows Pool → RDP Connection → Cleanup
+
+AI Agent Integration:
+Use the VMAgentAdapter class for standardized, AI-friendly VM control operations.
 """
 
 import asyncio
@@ -408,7 +412,7 @@ class EC2WindowsManager:
     
     def _generate_user_data_script(self, user_id: str, session_id: str) -> str:
         """
-        Generate PowerShell user data script for Windows VM initialization with TightVNC.
+        Generate PowerShell user data script for Windows VM initialization with RDP.
         
         Args:
             user_id: User identifier
@@ -417,104 +421,64 @@ class EC2WindowsManager:
         Returns:
             Base64 encoded PowerShell script
         """
-        # Get VNC configuration from config
-        vnc_password = self.config.get('tightvnc', {}).get('password', 'VNCPass123!')
-        vnc_port = self.config.get('tightvnc', {}).get('port', 5900)
-        vnc_geometry = self.config.get('tightvnc', {}).get('geometry', '1920x1080')
         
         script = f"""<powershell>
-# Windows VM Initialization Script with TightVNC Support
+# Windows VM Initialization Script with RDP Support
 Write-Host "Starting Windows VM initialization for user {user_id}"
 
 # Create directories
 New-Item -ItemType Directory -Path "C:\\temp" -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path "C:\\UserSessions\\{user_id}\\{session_id}" -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path "C:\\VNC" -Force -ErrorAction SilentlyContinue
 
-# Enable RDP (fallback remote access)
+# Enable RDP (primary remote access)
 Write-Host "Configuring RDP access..."
 Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -name "fDenyTSConnections" -Value 0
 Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
+# Configure RDP settings for better performance
+Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -name "UserAuthentication" -Value 0
+Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -name "SecurityLayer" -Value 0
+
 # Set up Administrator password
-$Password = "TempPass" + (Get-Random -Maximum 9999) + "!"
+$Password = "RDPPass" + (Get-Random -Maximum 99999) + "!"
 $SecurePassword = ConvertTo-SecureString -String $Password -AsPlainText -Force
 Set-LocalUser -Name "Administrator" -Password $SecurePassword
 
 # Write password to file for SDK retrieval
 $Password | Out-File -FilePath C:\\temp\\rdp_password.txt -Encoding ASCII
 
-# Download and Install TightVNC Server
-Write-Host "Downloading TightVNC Server..."
-$TightVNCUrl = "https://www.tightvnc.com/download/2.8.27/tightvnc-2.8.27-gpl-setup-64bit.msi"
-$TightVNCPath = "C:\\temp\\tightvnc-setup.msi"
+# Ensure Administrator account is enabled
+Enable-LocalUser -Name "Administrator"
 
+# Configure RDP service
+Write-Host "Configuring RDP service..."
 try {{
-    # Download TightVNC installer
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    Invoke-WebRequest -Uri $TightVNCUrl -OutFile $TightVNCPath -UseBasicParsing
+    # Ensure Terminal Services is running
+    Start-Service -Name "TermService" -ErrorAction SilentlyContinue
+    Set-Service -Name "TermService" -StartupType Automatic -ErrorAction SilentlyContinue
     
-    Write-Host "Installing TightVNC Server..."
-    # Silent install with custom configuration
-    $InstallArgs = @(
-        "/i", $TightVNCPath,
-        "/quiet", "/norestart",
-        "ADDLOCAL=Server",
-        "SERVER_REGISTER_AS_SERVICE=1",
-        "SERVER_ADD_FIREWALL_EXCEPTION=1",
-        "SERVER_ALLOW_SAS=1",
-        "SET_USEVNCAUTHENTICATION=1",
-        "VALUE_OF_USEVNCAUTHENTICATION=1",
-        "SET_PASSWORD=1",
-        "VALUE_OF_PASSWORD={vnc_password}",
-        "SET_VIEWONLYPASSWORD=1",
-        "VALUE_OF_VIEWONLYPASSWORD=readonly123",
-        "SET_USEAUTHENTICATION=1",
-        "VALUE_OF_USEAUTHENTICATION=1"
-    )
+    # Configure Windows Firewall for RDP
+    Write-Host "Configuring Windows Firewall for RDP..."
+    Enable-NetFirewallRule -DisplayName "Remote Desktop - User Mode (TCP-In)"
+    Enable-NetFirewallRule -DisplayName "Remote Desktop - User Mode (UDP-In)"
     
-    Start-Process -FilePath "msiexec.exe" -ArgumentList $InstallArgs -Wait -NoNewWindow
+    # Ensure RDP is fully enabled
+    reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v "fDenyTSConnections" /t REG_DWORD /d 0 /f
+    reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp" /v "UserAuthentication" /t REG_DWORD /d 0 /f
     
-    Write-Host "TightVNC Server installed successfully"
-    
-    # Configure TightVNC Server
-    Write-Host "Configuring TightVNC Server..."
-    
-    # Create TightVNC registry configuration
-    $VNCRegPath = "HKLM:\\SOFTWARE\\TightVNC\\Server"
-    
-    # Set VNC server configuration
-    Set-ItemProperty -Path $VNCRegPath -Name "RfbPort" -Value {vnc_port} -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $VNCRegPath -Name "HttpPort" -Value 5800 -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $VNCRegPath -Name "Password" -Value (ConvertTo-SecureString -String "{vnc_password}" -AsPlainText -Force | ConvertFrom-SecureString) -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $VNCRegPath -Name "AlwaysShared" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $VNCRegPath -Name "NeverShared" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $VNCRegPath -Name "DisconnectAction" -Value 0 -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $VNCRegPath -Name "AcceptRfbConnections" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-    
-    # Configure Windows Firewall for VNC
-    Write-Host "Configuring Windows Firewall for VNC..."
-    New-NetFirewallRule -DisplayName "TightVNC Server" -Direction Inbound -Protocol TCP -LocalPort {vnc_port} -Action Allow -ErrorAction SilentlyContinue
-    New-NetFirewallRule -DisplayName "TightVNC HTTP" -Direction Inbound -Protocol TCP -LocalPort 5800 -Action Allow -ErrorAction SilentlyContinue
-    
-    # Start TightVNC Server service
-    Write-Host "Starting TightVNC Server service..."
-    Start-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue
-    Set-Service -Name "TightVNC Server" -StartupType Automatic -ErrorAction SilentlyContinue
-    
-    # Verify service is running
-    $VNCService = Get-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue
-    if ($VNCService -and $VNCService.Status -eq "Running") {{
-        Write-Host "TightVNC Server service is running successfully"
-        $true | Out-File -FilePath "C:\\temp\\vnc_ready.txt" -Encoding ASCII
+    # Verify RDP service is running
+    $RDPService = Get-Service -Name "TermService" -ErrorAction SilentlyContinue
+    if ($RDPService -and $RDPService.Status -eq "Running") {{
+        Write-Host "RDP service is running successfully"
+        $true | Out-File -FilePath "C:\\temp\\rdp_ready.txt" -Encoding ASCII
     }} else {{
-        Write-Host "Warning: TightVNC Server service is not running"
-        $false | Out-File -FilePath "C:\\temp\\vnc_ready.txt" -Encoding ASCII
+        Write-Host "Warning: RDP service is not running"
+        $false | Out-File -FilePath "C:\\temp\\rdp_ready.txt" -Encoding ASCII
     }}
     
 }} catch {{
-    Write-Host "Error installing TightVNC: $($_.Exception.Message)"
-    $false | Out-File -FilePath "C:\\temp\\vnc_ready.txt" -Encoding ASCII
+    Write-Host "Error configuring RDP: $($_.Exception.Message)"
+    $false | Out-File -FilePath "C:\\temp\\rdp_ready.txt" -Encoding ASCII
 }}
 
 # Install common software packages
@@ -543,14 +507,13 @@ try {{
 # Configure desktop environment
 Write-Host "Configuring desktop environment..."
 try {{
-    # Set desktop wallpaper and theme for better VNC experience
+    # Set desktop wallpaper and theme for better RDP experience
     Set-ItemProperty -Path "HKCU:\\Control Panel\\Desktop" -Name "Wallpaper" -Value ""
     Set-ItemProperty -Path "HKCU:\\Control Panel\\Colors" -Name "Background" -Value "0 78 212"  # Blue background
     
-    # Disable Windows animations for better VNC performance
-    Set-ItemProperty -Path "HKCU:\\Control Panel\\Desktop" -Name "UserPreferencesMask" -Value @(144,18,3,128,16,0,0,0) -Type Binary
-    Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" -Name "ListviewAlphaSelect" -Value 0 -Type DWord
-    Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced" -Name "TaskbarAnimations" -Value 0 -Type DWord
+    # Configure RDP performance settings
+    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services" -Name "MaxIdleTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services" -Name "MaxDisconnectionTime" -Value 0 -Type DWord -ErrorAction SilentlyContinue
     
 }} catch {{
     Write-Host "Warning: Failed to configure desktop environment: $($_.Exception.Message)"
@@ -562,10 +525,9 @@ $SessionInfo = @{{
     UserId = "{user_id}"
     SessionId = "{session_id}"
     StartTime = (Get-Date).ToString()
-    VNCPort = {vnc_port}
-    VNCPassword = "{vnc_password}"
+    RDPPort = 3389
     RDPPassword = $Password
-    Geometry = "{vnc_geometry}"
+    RDPUsername = "Administrator"
 }} | ConvertTo-Json
 
 $SessionInfo | Out-File -FilePath "C:\\UserSessions\\session_info.json" -Encoding ASCII
@@ -573,19 +535,19 @@ $SessionInfo | Out-File -FilePath "C:\\temp\\session_info.json" -Encoding ASCII
 
 # Create health check script
 $HealthCheckScript = @"
-# VNC Health Check Script
-`$VNCService = Get-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue
-if (`$VNCService -and `$VNCService.Status -eq "Running") {{
-    "VNC_HEALTHY" | Out-File -FilePath "C:\\temp\\health_check.txt" -Encoding ASCII
+# RDP Health Check Script
+`$RDPService = Get-Service -Name "TermService" -ErrorAction SilentlyContinue
+if (`$RDPService -and `$RDPService.Status -eq "Running") {{
+    "RDP_HEALTHY" | Out-File -FilePath "C:\\temp\\health_check.txt" -Encoding ASCII
 }} else {{
-    "VNC_UNHEALTHY" | Out-File -FilePath "C:\\temp\\health_check.txt" -Encoding ASCII
+    "RDP_UNHEALTHY" | Out-File -FilePath "C:\\temp\\health_check.txt" -Encoding ASCII
 }}
 "@
 
 $HealthCheckScript | Out-File -FilePath "C:\\temp\\health_check.ps1" -Encoding ASCII
 
 # Schedule health check to run every 5 minutes
-schtasks /create /tn "VNC Health Check" /tr "powershell.exe -File C:\\temp\\health_check.ps1" /sc minute /mo 5 /ru SYSTEM /f
+schtasks /create /tn "RDP Health Check" /tr "powershell.exe -File C:\\temp\\health_check.ps1" /sc minute /mo 5 /ru SYSTEM /f
 
 # Final system configuration
 Write-Host "Performing final system configuration..."
@@ -599,9 +561,9 @@ powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
 # Signal system ready state
 New-Item -ItemType File -Path "C:\\temp\\vm_ready.txt" -Force
 
-Write-Host "Windows VM initialization with TightVNC completed successfully"
-Write-Host "VNC Server available on port {vnc_port}"
-Write-Host "RDP available on port 3389"
+Write-Host "Windows VM initialization with RDP completed successfully"
+Write-Host "RDP Server available on port 3389"
+Write-Host "Administrator password saved to C:\\temp\\rdp_password.txt"
 </powershell>"""
         
         # Base64 encode the script
@@ -838,3 +800,155 @@ Write-Host "RDP available on port 3389"
             "users_with_instances": len([uid for uid, iids in self._user_instances.items() if iids]),
             "spot_instances": sum(1 for i in active_instances if i.is_spot_instance)
         }
+
+
+# AI Agent Integration
+# Import VMAgentAdapter for AI-friendly interface
+try:
+    from vm_agent_adapter import VMAgentAdapter, ActionBuilder, create_ai_vm_session
+    _AGENT_ADAPTER_AVAILABLE = True
+except ImportError:
+    _AGENT_ADAPTER_AVAILABLE = False
+
+
+async def create_ai_friendly_vm(user_id: str, aws_region: str = "us-west-2") -> Optional['VMAgentAdapter']:
+    """
+    Create a VM session optimized for AI agent interaction.
+    
+    This is a convenience function that sets up the complete infrastructure
+    and returns a standardized VMAgentAdapter interface for AI agents.
+    
+    Args:
+        user_id: Unique identifier for the AI agent session
+        aws_region: AWS region to create VM in
+        
+    Returns:
+        VMAgentAdapter instance if successful, None otherwise
+        
+    Example:
+        # Create VM for AI agent
+        vm_adapter = await create_ai_friendly_vm("ai_agent_001")
+        
+        if vm_adapter:
+            # Take screenshot
+            screenshot = await vm_adapter.execute_action(ActionBuilder.screenshot())
+            
+            # Click on desktop
+            click_result = await vm_adapter.execute_action(ActionBuilder.click(500, 300))
+            
+            # Type text
+            type_result = await vm_adapter.execute_action(ActionBuilder.type_text("Hello AI!"))
+            
+            # Get VM state
+            state = await vm_adapter.get_vm_state()
+            print(f"VM State: {state.state.value}")
+            
+            # Cleanup when done
+            await vm_adapter.cleanup_session()
+    """
+    if not _AGENT_ADAPTER_AVAILABLE:
+        logging.error("VMAgentAdapter not available. Install vm_agent_adapter module.")
+        return None
+    
+    try:
+        # Create WindowsVMManager with default configuration
+        vm_manager = WindowsVMManager(aws_region=aws_region)
+        
+        # Create EC2PoolManager (this would normally come from configuration)
+        from infrastructure_sdk.config import InfraSDKConfig
+        config = InfraSDKConfig.from_dotenv()
+        from ec2_pool_manager import EC2PoolManager
+        
+        pool_manager = EC2PoolManager(config)
+        
+        # Create AI-friendly VM session
+        return await create_ai_vm_session(user_id, pool_manager)
+        
+    except Exception as e:
+        logging.error(f"Failed to create AI-friendly VM: {e}")
+        return None
+
+
+def get_ai_action_examples() -> Dict[str, str]:
+    """
+    Get example code snippets for common AI agent VM operations.
+    
+    Returns:
+        Dictionary of operation names to code examples
+    """
+    return {
+        "basic_setup": """
+# Basic VM setup for AI agent
+vm_adapter = await create_ai_friendly_vm("my_ai_agent")
+
+if vm_adapter:
+    # VM is ready for AI control
+    state = await vm_adapter.get_vm_state()
+    print(f"VM ready: {state.state.value}")
+""",
+        
+        "mouse_operations": """
+# Mouse operations
+await vm_adapter.execute_action(ActionBuilder.click(100, 200))
+await vm_adapter.execute_action(ActionBuilder.double_click(300, 400))  
+await vm_adapter.execute_action(ActionBuilder.right_click(500, 600))
+""",
+        
+        "keyboard_operations": """
+# Keyboard operations
+await vm_adapter.execute_action(ActionBuilder.type_text("Hello from AI!"))
+await vm_adapter.execute_action(ActionBuilder.hotkey("ctrl", "c"))
+await vm_adapter.execute_action(ActionBuilder.hotkey("win", "r"))
+""",
+        
+        "screen_capture": """
+# Screen capture and analysis
+screenshot_result = await vm_adapter.execute_action(ActionBuilder.screenshot())
+
+if screenshot_result.success:
+    screenshot_data = screenshot_result.return_data
+    # Process screenshot with computer vision
+    # analyze_screenshot(screenshot_data)
+""",
+        
+        "state_monitoring": """
+# VM state monitoring
+state = await vm_adapter.get_vm_state()
+
+print(f"State: {state.state.value}")
+print(f"Connection: {state.connection_quality}")
+print(f"Performance: {state.performance_metrics}")
+
+# Wait for specific condition
+success = await vm_adapter.wait_for_condition(
+    lambda: check_if_application_loaded(),
+    timeout_seconds=30
+)
+""",
+        
+        "error_handling": """
+# Robust error handling
+result = await vm_adapter.execute_action(ActionBuilder.click(x, y))
+
+if result.success:
+    print(f"Action completed in {result.execution_time_ms}ms")
+else:
+    print(f"Action failed: {result.error_message}")
+    
+    # Check VM state
+    state = await vm_adapter.get_vm_state()
+    if state.state == VMState.ERROR:
+        # Handle error condition
+        await vm_adapter.cleanup_session()
+""",
+        
+        "cleanup": """
+# Always cleanup when done
+try:
+    # Do AI agent work...
+    pass
+finally:
+    if vm_adapter:
+        await vm_adapter.cleanup_session()
+"""
+    }

@@ -1,0 +1,176 @@
+# COST CONTROL CONFIGURATION - STRICT LIMITS
+# Zero tolerance for overspending
+# All values in USD
+
+limits:
+  daily_budget: 500           # $500/day MAXIMUM
+  monthly_budget: 10000        # $10,000/month MAXIMUM
+  max_instances: 10            # 10 instances MAXIMUM concurrent
+  max_instance_hours: 24       # 24 hours MAXIMUM per instance
+  spot_only: true             # ONLY use spot instances
+  
+  # Alert thresholds (percentage of budget)
+  alert_thresholds:
+    - 50   # Warning at 50%
+    - 70   # Alert at 70%
+    - 80   # Critical at 80% - triggers shutdown
+    - 90   # Emergency at 90% - immediate termination
+    
+instance_types:
+  # ALLOWED instance types only
+  allowed:
+    - t3.medium       # $0.0416/hour - PREFERRED
+    - t3.large        # $0.0832/hour - ACCEPTABLE
+    - t3a.medium      # $0.0376/hour - CHEAPEST
+    - t3a.large       # $0.0752/hour - ALTERNATIVE
+    - t2.medium       # $0.0464/hour - BACKUP
+    
+  # FORBIDDEN instance types - NEVER use
+  forbidden:
+    - m5.xlarge       # $0.192/hour - TOO EXPENSIVE
+    - m5.2xlarge      # $0.384/hour - WAY TOO EXPENSIVE
+    - m5.4xlarge      # $0.768/hour - ABSOLUTELY NOT
+    - c5.xlarge       # $0.170/hour - UNNECESSARY
+    - c5.2xlarge      # $0.340/hour - FORBIDDEN
+    - r5.xlarge       # $0.252/hour - MEMORY WASTE
+    - r5.2xlarge      # $0.504/hour - NEVER
+    - x1e.*           # $0.834+/hour - BANNED
+    - p3.*            # $3.06+/hour - ABSOLUTELY BANNED
+    - p4d.*           # $32.77+/hour - INSTANT TERMINATION
+    
+auto_shutdown:
+  # Idle detection
+  idle_threshold_minutes: 60         # 1 hour idle = shutdown
+  cpu_idle_threshold: 5               # < 5% CPU = idle
+  memory_idle_threshold: 10           # < 10% memory = idle
+  
+  # Daily schedules
+  daily_shutdown_time: "19:00"        # 7 PM shutdown
+  daily_startup_time: "07:00"         # 7 AM startup
+  
+  # Environment-specific rules
+  environments:
+    dev:
+      auto_stop: true
+      weekend_shutdown: true
+      holiday_shutdown: true
+      max_runtime_hours: 12
+      
+    staging:
+      auto_stop: true
+      weekend_shutdown: true
+      holiday_shutdown: true
+      max_runtime_hours: 12
+      
+    test:
+      auto_stop: true
+      weekend_shutdown: true
+      holiday_shutdown: true
+      max_runtime_hours: 8
+      
+    prod:
+      auto_stop: false
+      weekend_shutdown: false
+      holiday_shutdown: false
+      max_runtime_hours: 0  # No limit for prod
+      
+spot_configuration:
+  # Spot bidding strategy
+  max_bid_percentage: 30              # Max 30% of on-demand price
+  allocation_strategy: "lowestPrice"  # Always choose cheapest
+  diversification: true                # Use multiple instance types
+  interruption_behavior: "terminate"   # Terminate on interruption
+  
+resource_cleanup:
+  # Automatic deletion policies
+  delete_unattached_volumes: true
+  delete_old_snapshots: true
+  snapshot_retention_days: 7
+  delete_unused_amis: true
+  ami_retention_days: 30
+  release_unused_elastic_ips: true
+  delete_unused_security_groups: true
+  delete_empty_load_balancers: true
+  
+tagging_requirements:
+  # MANDATORY tags - instances without these will be TERMINATED
+  required_tags:
+    - AutoDelete      # true/false - auto deletion policy
+    - CostCenter      # Cost allocation identifier
+    - MaxHours        # Maximum runtime in hours
+    - Environment     # dev/staging/test/prod
+    - Owner           # Owner email address
+    
+  # Grace period before termination
+  grace_period_hours: 2
+  
+  # Enforcement
+  enforce_on_launch: true
+  terminate_untagged: true
+  
+cost_anomaly_detection:
+  # Anomaly thresholds
+  daily_increase_threshold: 20        # 20% daily increase = anomaly
+  weekly_increase_threshold: 30       # 30% weekly increase = anomaly
+  service_cost_threshold: 100         # $100/day for any service = alert
+  
+  # Actions on anomaly
+  alert_on_anomaly: true
+  auto_investigate: true
+  emergency_shutdown_on_critical: true
+  
+reporting:
+  # Report schedules
+  daily_report: true
+  weekly_report: true
+  monthly_report: true
+  
+  # Report recipients
+  email_recipients:
+    - ops@company.com
+    - finance@company.com
+    
+  # Metrics to track
+  metrics:
+    - total_spend
+    - spend_by_service
+    - spend_by_instance_type
+    - spot_savings
+    - idle_resource_cost
+    - budget_utilization
+    - cost_per_environment
+    
+emergency_controls:
+  # Emergency shutdown triggers
+  budget_breach_shutdown: true        # Shutdown on budget breach
+  anomaly_shutdown: true              # Shutdown on critical anomaly
+  manual_override: true               # Allow manual emergency shutdown
+  
+  # Recovery
+  auto_restart_after_shutdown: false  # Don't auto-restart
+  require_approval_to_restart: true   # Require manual approval
+  
+optimization_targets:
+  # Cost reduction goals
+  target_monthly_spend: 3000          # Target: $3,000/month
+  target_spot_percentage: 100         # Target: 100% spot instances
+  target_idle_percentage: 0           # Target: 0% idle resources
+  target_rightsizing_percentage: 100  # Target: 100% rightsized
+  
+  # Savings targets (from baseline)
+  minimum_savings_percentage: 80      # Minimum 80% cost reduction
+  
+monitoring:
+  # CloudWatch alarms
+  create_budget_alarms: true
+  create_anomaly_alarms: true
+  create_utilization_alarms: true
+  
+  # Metrics collection
+  metric_collection_interval: 300     # 5 minutes
+  detailed_monitoring: false          # Don't use detailed (costs extra)
+  
+  # Dashboards
+  create_cost_dashboard: true
+  create_utilization_dashboard: true
+  create_savings_dashboard: true

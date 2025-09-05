@@ -449,14 +449,16 @@ class InfraSDKConfig:
             'min_pool_size': 2,
             'max_pool_size': self.cost_optimization.max_concurrent_instances,
             'target_utilization': 75.0,
-            'max_vnc_connections': 20,
-            'vnc_port': 5900,
-            'vnc_password': None,
-            'vnc_target_fps': 18,
-            'vnc_quality': 6,
-            'vnc_compression': 6,
-            'vnc_connection_timeout': 30,
-            'vnc_authentication': True
+            'max_rdp_connections': 20,
+            'rdp_port': 3389,
+            'rdp_username': 'Administrator',
+            'rdp_password': None,
+            'rdp_target_fps': 20,
+            'rdp_color_depth': 32,
+            'rdp_resolution': (1920, 1080),
+            'rdp_compression': True,
+            'rdp_connection_timeout': 30,
+            'rdp_authentication': True
         }
         
         if key in mapping:
