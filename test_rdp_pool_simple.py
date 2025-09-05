@@ -15,6 +15,10 @@ from datetime import datetime
 import json
 import boto3
 from dotenv import load_dotenv
+import subprocess
+import platform
+import base64
+import tempfile
 
 # Load environment variables from .env file
 load_dotenv()
@@ -196,14 +200,99 @@ class SimpleRDPPoolTest:
             self.test_results['instance_ready'] = False
             return False
     
+    def launch_rdp_client(self, host: str, username: str = 'Administrator', password: str = None):
+        """Launch RDP client to connect to Windows instance"""
+        system = platform.system().lower()
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"RDP CONNECTION INFORMATION")
+        logger.info(f"{'='*60}")
+        logger.info(f"Host: {host}")
+        logger.info(f"Username: {username}")
+        if password:
+            logger.info(f"Password: {password}")
+        else:
+            logger.info(f"Password: (not available - need .pem key to decrypt)")
+        logger.info(f"{'='*60}")
+        
+        if system == 'darwin':  # macOS
+            # Check if xfreerdp is installed
+            if subprocess.run(['which', 'xfreerdp'], capture_output=True).returncode == 0:
+                logger.info("\n✓ FreeRDP found. Launching RDP connection...")
+                cmd = [
+                    'xfreerdp',
+                    f'/v:{host}',
+                    f'/u:{username}',
+                    '/w:1920',
+                    '/h:1080',
+                    '/cert:ignore',
+                    '+clipboard',
+                    '/network:auto'
+                ]
+                if password:
+                    cmd.append(f'/p:{password}')
+                
+                logger.info(f"Command: {' '.join(cmd[:3])}...")
+                subprocess.Popen(cmd)
+                logger.info("✓ RDP client launched. Check your desktop for the remote window.")
+            else:
+                logger.info("\n⚠️  FreeRDP not found.")
+                logger.info("To install: brew install freerdp")
+                logger.info("\nAlternatively, use Microsoft Remote Desktop from App Store")
+                logger.info("Manual connection using the details above.")
+        
+        elif system == 'windows':
+            # Create RDP file for Windows
+            rdp_content = f"""full address:s:{host}
+username:s:{username}
+authentication level:i:0
+screen mode id:i:2
+desktopwidth:i:1920
+desktopheight:i:1080"""
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.rdp', delete=False) as f:
+                f.write(rdp_content)
+                rdp_file = f.name
+            
+            logger.info("\n✓ Launching Windows Remote Desktop...")
+            subprocess.Popen(['mstsc', rdp_file])
+            logger.info("✓ RDP client launched. Enter the password when prompted.")
+            
+        elif system == 'linux':
+            # Try xfreerdp or rdesktop
+            if subprocess.run(['which', 'xfreerdp'], capture_output=True).returncode == 0:
+                logger.info("\n✓ FreeRDP found. Launching RDP connection...")
+                cmd = [
+                    'xfreerdp',
+                    f'/v:{host}',
+                    f'/u:{username}',
+                    '/w:1920',
+                    '/h:1080',
+                    '/cert:ignore'
+                ]
+                if password:
+                    cmd.append(f'/p:{password}')
+                subprocess.Popen(cmd)
+                logger.info("✓ RDP client launched.")
+            elif subprocess.run(['which', 'rdesktop'], capture_output=True).returncode == 0:
+                cmd = ['rdesktop', '-u', username, '-g', '1920x1080', host]
+                if password:
+                    cmd.extend(['-p', password])
+                subprocess.Popen(cmd)
+                logger.info("✓ RDP client launched.")
+            else:
+                logger.info("\n⚠️  No RDP client found.")
+                logger.info("Install with: sudo apt-get install freerdp2-x11")
+                logger.info("Or: sudo apt-get install rdesktop")
+    
     async def test_rdp_connectivity(self) -> bool:
-        """Test RDP port connectivity"""
+        """Test RDP port connectivity and optionally launch RDP client"""
         try:
             logger.info("=== Testing RDP connectivity ===")
             
             import socket
             
-            for inst_data in self.instances:
+            for i, inst_data in enumerate(self.instances):
                 if not inst_data.get('public_ip'):
                     logger.warning(f"No public IP for {inst_data['instance_id']}")
                     continue
@@ -218,6 +307,15 @@ class SimpleRDPPoolTest:
                     if result == 0:
                         logger.info(f"✓ RDP port open on {inst_data['public_ip']}")
                         inst_data['rdp_available'] = True
+                        
+                        # Launch RDP client for first available instance
+                        if i == 0:  # Only launch for first instance to avoid multiple windows
+                            logger.info(f"\nLaunching RDP client for instance {inst_data['instance_id']}...")
+                            self.launch_rdp_client(
+                                inst_data['public_ip'],
+                                username='Administrator',
+                                password=inst_data.get('rdp_password')
+                            )
                     else:
                         logger.warning(f"✗ RDP port closed on {inst_data['public_ip']}")
                         inst_data['rdp_available'] = False
