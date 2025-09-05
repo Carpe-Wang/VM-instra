@@ -1,0 +1,234 @@
+# SPOT INSTANCE CONFIGURATION - MAXIMUM SAVINGS
+# 70-90% cheaper than on-demand
+# Diversified fleet for availability
+
+spot_fleet:
+  # Fleet sizing
+  target_capacity: 5                    # Start with 5 instances
+  min_capacity: 1                       # Minimum 1 instance
+  max_capacity: 10                      # Maximum 10 instances
+  
+  # Pricing strategy
+  max_bid_percentage: 30                 # Max 30% of on-demand price
+  allocation_strategy: "lowestPrice"     # Always choose cheapest
+  
+  # Fleet behavior
+  maintain_capacity: true                # Replace terminated instances
+  terminate_on_expiration: true         # Clean termination
+  instance_interruption_behavior: "terminate"  # Terminate on interruption
+  
+  # Valid until (days from creation)
+  valid_days: 7                          # Recreate weekly for best prices
+  
+instance_pools:
+  # Primary pool - t3.medium (cheapest)
+  - instance_type: t3.medium
+    weight: 1.0                          # 1 capacity unit
+    max_price: 0.0125                    # $0.0125/hour max (30% of $0.0416)
+    priority: 1                          # Highest priority
+    subnets:
+      - subnet-1a
+      - subnet-1b
+      - subnet-1c
+    
+  # Secondary pool - t3.large
+  - instance_type: t3.large
+    weight: 2.0                          # 2 capacity units
+    max_price: 0.025                     # $0.025/hour max (30% of $0.0832)
+    priority: 2
+    subnets:
+      - subnet-1a
+      - subnet-1b
+      - subnet-1c
+    
+  # Alternative pool - t3a.medium (AMD, usually cheaper)
+  - instance_type: t3a.medium
+    weight: 1.0
+    max_price: 0.0113                    # $0.0113/hour max (30% of $0.0376)
+    priority: 3
+    subnets:
+      - subnet-1a
+      - subnet-1b
+      - subnet-1c
+    
+  # Alternative pool - t3a.large (AMD)
+  - instance_type: t3a.large
+    weight: 2.0
+    max_price: 0.0226                    # $0.0226/hour max (30% of $0.0752)
+    priority: 4
+    subnets:
+      - subnet-1a
+      - subnet-1b
+      - subnet-1c
+    
+  # Backup pool - t2.medium (older generation)
+  - instance_type: t2.medium
+    weight: 1.0
+    max_price: 0.0139                    # $0.0139/hour max (30% of $0.0464)
+    priority: 5
+    subnets:
+      - subnet-1a
+      - subnet-1b
+      - subnet-1c
+    
+launch_template:
+  # AMI configuration
+  image_id: ami-0c55b159cbfafe1f0        # Update with your AMI
+  
+  # Security
+  key_name: vm-instra-key
+  security_group_ids:
+    - sg-default
+    
+  # Instance configuration
+  instance_initiated_shutdown_behavior: "terminate"
+  monitoring_enabled: false               # Basic monitoring only (free)
+  
+  # EBS optimization
+  ebs_optimized: false                   # Not needed for t3
+  
+  # User data script
+  user_data: |
+    #!/bin/bash
+    # Cost optimization settings
+    echo "SPOT_INSTANCE=true" >> /etc/environment
+    
+    # Install CloudWatch agent for monitoring
+    wget https://s3.amazonaws.com/amazoncloudwatch-agent/linux/amd64/latest/AmazonCloudWatchAgent.zip
+    unzip AmazonCloudWatchAgent.zip
+    sudo ./install.sh
+    
+    # Auto-shutdown on idle
+    cat > /usr/local/bin/idle_check.sh << 'EOF'
+    #!/bin/bash
+    CPU_IDLE=$(mpstat 1 1 | awk '/Average:/ {print 100-$NF}')
+    if (( $(echo "$CPU_IDLE < 5" | bc -l) )); then
+        logger "Instance idle for 1 hour, shutting down"
+        shutdown -h now
+    fi
+    EOF
+    chmod +x /usr/local/bin/idle_check.sh
+    
+    # Schedule idle checks every 15 minutes
+    echo "*/15 * * * * root /usr/local/bin/idle_check.sh" >> /etc/crontab
+    
+    # Spot interruption handler
+    cat > /usr/local/bin/spot_interruption_handler.sh << 'EOF'
+    #!/bin/bash
+    while true; do
+        if curl -s http://169.254.169.254/latest/meta-data/spot/termination-time | grep -q .; then
+            logger "Spot instance termination notice received"
+            # Graceful shutdown tasks here
+            shutdown -h now
+        fi
+        sleep 5
+    done
+    EOF
+    chmod +x /usr/local/bin/spot_interruption_handler.sh
+    nohup /usr/local/bin/spot_interruption_handler.sh &
+    
+  # Tags
+  tags:
+    AutoDelete: "true"
+    CostCenter: "vm-instra"
+    MaxHours: "24"
+    Environment: "prod"
+    Owner: "ops@company.com"
+    InstanceType: "spot-fleet"
+    
+block_device_mappings:
+  # Root volume
+  - device_name: /dev/xvda
+    ebs:
+      volume_size: 20                     # 20 GB minimum
+      volume_type: gp3                    # Cheaper than gp2
+      iops: 3000                          # Default for gp3
+      throughput: 125                     # Default for gp3
+      delete_on_termination: true        # Always delete
+      encrypted: false                    # Encryption costs extra
+      
+spot_request_configuration:
+  # Request type
+  type: "persistent"                     # Persistent for fleet
+  
+  # Validity
+  valid_from: "now"
+  valid_until_days: 7
+  
+  # Interruption behavior
+  instance_interruption_behavior: "terminate"
+  
+  # Request tags
+  tags:
+    Purpose: "cost-optimization"
+    ManagedBy: "spot-fleet"
+    
+monitoring:
+  # CloudWatch monitoring
+  detailed_monitoring: false             # Basic only (free)
+  
+  # Metrics to track
+  metrics:
+    - CPUUtilization
+    - NetworkIn
+    - NetworkOut
+    
+  # Alarms
+  alarms:
+    - name: "spot-interruption"
+      metric: "SpotInstanceInterruption"
+      threshold: 1
+      action: "notify"
+      
+    - name: "low-utilization"
+      metric: "CPUUtilization"
+      threshold: 5
+      comparison: "LessThanThreshold"
+      action: "terminate"
+      
+savings_tracking:
+  # Track savings vs on-demand
+  calculate_savings: true
+  report_frequency: "daily"
+  
+  # Baseline costs (on-demand)
+  baseline_costs:
+    t3.medium: 0.0416
+    t3.large: 0.0832
+    t3a.medium: 0.0376
+    t3a.large: 0.0752
+    t2.medium: 0.0464
+    
+  # Expected savings
+  target_savings_percentage: 70          # Minimum 70% savings
+  
+fallback_strategy:
+  # What to do if spot unavailable
+  use_on_demand: false                   # NEVER use on-demand
+  wait_for_spot: true                    # Wait for spot availability
+  max_wait_minutes: 30                   # Wait up to 30 minutes
+  
+  # Alternative regions (if multi-region)
+  alternative_regions: []                # Don't use other regions (costs more)
+  
+optimization_rules:
+  # Automatic optimization
+  rebalance_on_price_change: true       # Rebalance if prices change
+  price_check_interval: 3600             # Check prices hourly
+  
+  # Instance replacement
+  replace_if_price_exceeds: 0.03        # Replace if > $0.03/hour
+  prefer_newer_generation: true         # Prefer t3 over t2
+  
+  # Capacity optimization
+  scale_down_on_low_usage: true         # Reduce capacity if idle
+  scale_up_on_high_usage: false         # Don't auto-scale up (costs more)
+  
+termination_protection:
+  # Graceful shutdown
+  enable_termination_handler: true      # Handle spot termination
+  grace_period_seconds: 120              # 2 minute warning
+  
+  # Data protection
+  checkpoint_interval: 900               # Checkpoint every 15 minutes
+  save_state_on_termination: true       # Save state before termination

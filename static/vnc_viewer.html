@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VNC Remote Desktop Viewer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #2c2c2c;
+            color: #ffffff;
+            overflow: hidden;
+        }
+
+        .header {
+            background: #1e1e1e;
+            padding: 10px 20px;
+            border-bottom: 1px solid #404040;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 50px;
+            box-sizing: border-box;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: #0078d4;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ff4444;
+            transition: background 0.3s;
+        }
+
+        .status-indicator.connected {
+            background: #44ff44;
+        }
+
+        .status-indicator.connecting {
+            background: #ffaa44;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            background: #0078d4;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #106ebe;
+        }
+
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .btn.danger {
+            background: #d13438;
+        }
+
+        .btn.danger:hover {
+            background: #b71c1c;
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 70px);
+            position: relative;
+        }
+
+        .canvas-container {
+            flex: 1;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #vnc-canvas {
+            max-width: 100%;
+            max-height: 100%;
+            cursor: crosshair;
+            border: 1px solid #404040;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: #1e1e1e;
+            border-left: 1px solid #404040;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .sidebar-section {
+            border-bottom: 1px solid #404040;
+            padding: 15px;
+        }
+
+        .sidebar-section h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #0078d4;
+        }
+
+        .form-group {
+            margin-bottom: 10px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: #ccc;
+            margin-bottom: 4px;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #404040;
+            background: #2c2c2c;
+            color: #fff;
+            border-radius: 3px;
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-size: 12px;
+        }
+
+        .stats-item {
+            background: #2c2c2c;
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .stats-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #0078d4;
+        }
+
+        .stats-label {
+            color: #aaa;
+            margin-top: 2px;
+        }
+
+        .automation-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .automation-btn {
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            background: #333;
+            color: white;
+            cursor: pointer;
+            font-size: 11px;
+            transition: background 0.3s;
+        }
+
+        .automation-btn:hover {
+            background: #0078d4;
+        }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            z-index: 1000;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #333;
+            border-top: 4px solid #0078d4;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 15px;
+            color: #ccc;
+        }
+
+        .error-message {
+            background: #d13438;
+            color: white;
+            padding: 10px;
+            margin: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Responsive design */
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 250px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                height: auto;
+                padding: 10px;
+            }
+            
+            .main-container {
+                height: calc(100vh - 80px);
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+                height: 200px;
+                border-left: none;
+                border-top: 1px solid #404040;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <div class="logo">VNC Remote Desktop</div>
+            <div class="connection-status">
+                <div class="status-indicator" id="status-indicator"></div>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="controls">
+                <button class="btn" id="connect-btn" onclick="connect()">Connect</button>
+                <button class="btn danger" id="disconnect-btn" onclick="disconnect()" disabled>Disconnect</button>
+                <button class="btn" id="screenshot-btn" onclick="takeScreenshot()" disabled>Screenshot</button>
+                <button class="btn" id="fullscreen-btn" onclick="toggleFullscreen()">Fullscreen</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="canvas-container">
+            <canvas id="vnc-canvas"></canvas>
+            <div class="loading-overlay" id="loading-overlay">
+                <div class="loading-spinner"></div>
+                <div class="loading-text">Connecting to remote desktop...</div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="sidebar-section">
+                <h3>Connection</h3>
+                <div class="form-group">
+                    <label for="user-id">User ID</label>
+                    <input type="text" id="user-id" placeholder="Enter your user ID">
+                </div>
+                <div class="form-group">
+                    <label for="instance-id">Instance ID</label>
+                    <input type="text" id="instance-id" placeholder="Enter instance ID">
+                </div>
+                <div class="form-group">
+                    <label for="server-url">WebSocket Server</label>
+                    <input type="text" id="server-url" value="ws://localhost:8765">
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Performance</h3>
+                <div class="stats-grid">
+                    <div class="stats-item">
+                        <div class="stats-value" id="fps-value">0</div>
+                        <div class="stats-label">FPS</div>
+                    </div>
+                    <div class="stats-item">
+                        <div class="stats-value" id="latency-value">0</div>
+                        <div class="stats-label">Latency (ms)</div>
+                    </div>
+                    <div class="stats-item">
+                        <div class="stats-value" id="frames-value">0</div>
+                        <div class="stats-label">Frames</div>
+                    </div>
+                    <div class="stats-item">
+                        <div class="stats-value" id="bytes-value">0</div>
+                        <div class="stats-label">Data (KB)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Quick Actions</h3>
+                <div class="automation-buttons">
+                    <button class="automation-btn" onclick="sendAutomationCommand('desktop')">Show Desktop</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('task_manager')">Task Manager</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('run_dialog')">Run Dialog</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('chrome')">Open Chrome</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('notepad')">Open Notepad</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('cmd')">Command Prompt</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('explorer')">File Explorer</button>
+                    <button class="automation-btn" onclick="sendAutomationCommand('calculator')">Calculator</button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Settings</h3>
+                <div class="form-group">
+                    <label for="quality-slider">Quality</label>
+                    <input type="range" id="quality-slider" min="1" max="9" value="6" onchange="updateQuality(this.value)">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="mouse-acceleration" checked> Mouse Acceleration
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="keyboard-capture" checked> Capture All Keys
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class VNCViewer {
+            constructor() {
+                this.websocket = null;
+                this.canvas = document.getElementById('vnc-canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.isConnected = false;
+                this.frameCount = 0;
+                this.bytesReceived = 0;
+                this.lastFrameTime = 0;
+                this.fps = 0;
+                this.latency = 0;
+
+                // Bind event handlers
+                this.setupEventListeners();
+            }
+
+            setupEventListeners() {
+                // Mouse events
+                this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+                this.canvas.addEventListener('mousedown', (e) => this.handleMouseDown(e));
+                this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
+                this.canvas.addEventListener('wheel', (e) => this.handleMouseWheel(e));
+                this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+                // Keyboard events
+                document.addEventListener('keydown', (e) => this.handleKeyDown(e));
+                document.addEventListener('keyup', (e) => this.handleKeyUp(e));
+
+                // Canvas resize
+                window.addEventListener('resize', () => this.resizeCanvas());
+            }
+
+            connect() {
+                const userId = document.getElementById('user-id').value;
+                const instanceId = document.getElementById('instance-id').value;
+                const serverUrl = document.getElementById('server-url').value;
+
+                if (!userId || !instanceId) {
+                    alert('Please enter both User ID and Instance ID');
+                    return;
+                }
+
+                this.showLoading();
+                this.updateStatus('connecting', 'Connecting...');
+
+                try {
+                    this.websocket = new WebSocket(serverUrl);
+                    
+                    this.websocket.onopen = () => {
+                        console.log('WebSocket connected');
+                        this.sendMessage('connect_request', {
+                            user_id: userId,
+                            instance_id: instanceId
+                        });
+                    };
+
+                    this.websocket.onmessage = (event) => {
+                        this.handleMessage(JSON.parse(event.data));
+                    };
+
+                    this.websocket.onclose = () => {
+                        console.log('WebSocket disconnected');
+                        this.handleDisconnection();
+                    };
+
+                    this.websocket.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.showError('Connection failed: ' + error.message);
+                        this.hideLoading();
+                    };
+
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    this.showError('Failed to connect: ' + error.message);
+                    this.hideLoading();
+                }
+            }
+
+            disconnect() {
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.sendMessage('disconnect_request', {});
+                    this.websocket.close();
+                }
+                this.handleDisconnection();
+            }
+
+            handleMessage(message) {
+                const { type, payload } = message;
+
+                switch (type) {
+                    case 'connection_status':
+                        if (payload.status === 'connected') {
+                            this.handleConnectionSuccess(payload);
+                        } else if (payload.status === 'disconnected') {
+                            this.handleDisconnection();
+                        }
+                        break;
+
+                    case 'frame_update':
+                        this.handleFrameUpdate(payload);
+                        break;
+
+                    case 'error_message':
+                        this.showError(payload.error);
+                        break;
+
+                    case 'vnc_metrics':
+                        this.updateMetrics(payload);
+                        break;
+
+                    case 'pong':
+                        this.updateLatency(payload);
+                        break;
+
+                    default:
+                        console.log('Unknown message type:', type);
+                }
+            }
+
+            handleConnectionSuccess(payload) {
+                this.isConnected = true;
+                this.hideLoading();
+                this.updateStatus('connected', 'Connected to ' + payload.instance_id);
+                
+                document.getElementById('connect-btn').disabled = true;
+                document.getElementById('disconnect-btn').disabled = false;
+                document.getElementById('screenshot-btn').disabled = false;
+
+                // Request initial screenshot
+                this.sendMessage('screenshot_request', {});
+
+                // Start ping for latency measurement
+                setInterval(() => this.sendPing(), 5000);
+            }
+
+            handleDisconnection() {
+                this.isConnected = false;
+                this.hideLoading();
+                this.updateStatus('disconnected', 'Disconnected');
+                
+                document.getElementById('connect-btn').disabled = false;
+                document.getElementById('disconnect-btn').disabled = true;
+                document.getElementById('screenshot-btn').disabled = true;
+
+                // Clear canvas
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+                this.ctx.fillStyle = '#2c2c2c';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Reset metrics
+                this.frameCount = 0;
+                this.bytesReceived = 0;
+                this.fps = 0;
+                this.latency = 0;
+                this.updateStatsDisplay();
+            }
+
+            handleFrameUpdate(payload) {
+                const { image_data, timestamp } = payload;
+                
+                // Create image from base64 data
+                const img = new Image();
+                img.onload = () => {
+                    // Resize canvas to match image
+                    if (this.canvas.width !== img.width || this.canvas.height !== img.height) {
+                        this.canvas.width = img.width;
+                        this.canvas.height = img.height;
+                        this.resizeCanvas();
+                    }
+                    
+                    // Draw image
+                    this.ctx.drawImage(img, 0, 0);
+                    
+                    // Update metrics
+                    this.frameCount++;
+                    this.bytesReceived += image_data.length;
+                    this.updateFPS();
+                    this.updateStatsDisplay();
+                };
+                img.src = 'data:image/png;base64,' + image_data;
+            }
+
+            sendMessage(type, payload) {
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.websocket.send(JSON.stringify({
+                        type: type,
+                        payload: payload
+                    }));
+                }
+            }
+
+            sendPing() {
+                if (this.isConnected) {
+                    this.pingTime = Date.now();
+                    this.sendMessage('ping', { timestamp: this.pingTime });
+                }
+            }
+
+            updateLatency(payload) {
+                if (this.pingTime) {
+                    this.latency = Date.now() - this.pingTime;
+                    this.updateStatsDisplay();
+                }
+            }
+
+            // Mouse event handlers
+            handleMouseMove(event) {
+                if (!this.isConnected) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = Math.round((event.clientX - rect.left) * (this.canvas.width / rect.width));
+                const y = Math.round((event.clientY - rect.top) * (this.canvas.height / rect.height));
+                
+                this.sendMessage('mouse_event', {
+                    event_type: 'move',
+                    x: x,
+                    y: y
+                });
+            }
+
+            handleMouseDown(event) {
+                if (!this.isConnected) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = Math.round((event.clientX - rect.left) * (this.canvas.width / rect.width));
+                const y = Math.round((event.clientY - rect.top) * (this.canvas.height / rect.height));
+                const button = this.getMouseButton(event.button);
+                
+                this.sendMessage('mouse_event', {
+                    event_type: 'click',
+                    x: x,
+                    y: y,
+                    button: button
+                });
+                
+                event.preventDefault();
+            }
+
+            handleMouseUp(event) {
+                // Mouse up events might be handled differently if needed
+                event.preventDefault();
+            }
+
+            handleMouseWheel(event) {
+                if (!this.isConnected) return;
+                
+                const rect = this.canvas.getBoundingClientRect();
+                const x = Math.round((event.clientX - rect.left) * (this.canvas.width / rect.width));
+                const y = Math.round((event.clientY - rect.top) * (this.canvas.height / rect.height));
+                
+                this.sendMessage('mouse_event', {
+                    event_type: 'scroll',
+                    x: x,
+                    y: y,
+                    scroll_y: event.deltaY > 0 ? -1 : 1
+                });
+                
+                event.preventDefault();
+            }
+
+            getMouseButton(button) {
+                switch (button) {
+                    case 0: return 'left';
+                    case 1: return 'middle';
+                    case 2: return 'right';
+                    default: return 'left';
+                }
+            }
+
+            // Keyboard event handlers
+            handleKeyDown(event) {
+                if (!this.isConnected || !document.getElementById('keyboard-capture').checked) return;
+                
+                const key = this.getKeyString(event);
+                if (key) {
+                    this.sendMessage('keyboard_event', {
+                        event_type: 'keydown',
+                        key: key
+                    });
+                }
+                
+                event.preventDefault();
+            }
+
+            handleKeyUp(event) {
+                if (!this.isConnected || !document.getElementById('keyboard-capture').checked) return;
+                event.preventDefault();
+            }
+
+            getKeyString(event) {
+                const modifiers = [];
+                if (event.ctrlKey) modifiers.push('ctrl');
+                if (event.altKey) modifiers.push('alt');
+                if (event.shiftKey) modifiers.push('shift');
+                if (event.metaKey) modifiers.push('win');
+
+                let key = event.key;
+                
+                // Handle special keys
+                const keyMap = {
+                    'Enter': 'Return',
+                    'Escape': 'Escape',
+                    'Tab': 'Tab',
+                    'Backspace': 'BackSpace',
+                    'Delete': 'Delete',
+                    'ArrowUp': 'Up',
+                    'ArrowDown': 'Down',
+                    'ArrowLeft': 'Left',
+                    'ArrowRight': 'Right',
+                    'Home': 'Home',
+                    'End': 'End',
+                    'PageUp': 'Page_Up',
+                    'PageDown': 'Page_Down'
+                };
+
+                if (keyMap[key]) {
+                    key = keyMap[key];
+                }
+
+                if (modifiers.length > 0) {
+                    return modifiers.join('+') + '+' + key.toLowerCase();
+                } else if (key.length === 1) {
+                    return key;
+                } else {
+                    return key;
+                }
+            }
+
+            // Utility methods
+            updateStatus(status, text) {
+                const indicator = document.getElementById('status-indicator');
+                const statusText = document.getElementById('status-text');
+                
+                indicator.className = 'status-indicator ' + status;
+                statusText.textContent = text;
+            }
+
+            showLoading() {
+                document.getElementById('loading-overlay').classList.remove('hidden');
+            }
+
+            hideLoading() {
+                document.getElementById('loading-overlay').classList.add('hidden');
+            }
+
+            showError(message) {
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                errorDiv.textContent = message;
+                
+                document.body.appendChild(errorDiv);
+                
+                setTimeout(() => {
+                    document.body.removeChild(errorDiv);
+                }, 5000);
+            }
+
+            updateFPS() {
+                const now = Date.now();
+                if (this.lastFrameTime) {
+                    const elapsed = (now - this.lastFrameTime) / 1000;
+                    this.fps = Math.round(1 / elapsed * 10) / 10;
+                }
+                this.lastFrameTime = now;
+            }
+
+            updateStatsDisplay() {
+                document.getElementById('fps-value').textContent = this.fps;
+                document.getElementById('latency-value').textContent = this.latency;
+                document.getElementById('frames-value').textContent = this.frameCount;
+                document.getElementById('bytes-value').textContent = Math.round(this.bytesReceived / 1024);
+            }
+
+            resizeCanvas() {
+                const container = this.canvas.parentElement;
+                const maxWidth = container.clientWidth - 20;
+                const maxHeight = container.clientHeight - 20;
+                
+                if (this.canvas.width > 0 && this.canvas.height > 0) {
+                    const aspectRatio = this.canvas.width / this.canvas.height;
+                    
+                    let width = Math.min(maxWidth, this.canvas.width);
+                    let height = width / aspectRatio;
+                    
+                    if (height > maxHeight) {
+                        height = maxHeight;
+                        width = height * aspectRatio;
+                    }
+                    
+                    this.canvas.style.width = width + 'px';
+                    this.canvas.style.height = height + 'px';
+                }
+            }
+
+            takeScreenshot() {
+                if (this.isConnected) {
+                    this.sendMessage('screenshot_request', {});
+                }
+            }
+
+            sendAutomationCommand(command) {
+                if (this.isConnected) {
+                    this.sendMessage('automation_command', {
+                        command: command
+                    });
+                }
+            }
+        }
+
+        // Global instance
+        let vncViewer = new VNCViewer();
+
+        // Global functions for UI
+        function connect() {
+            vncViewer.connect();
+        }
+
+        function disconnect() {
+            vncViewer.disconnect();
+        }
+
+        function takeScreenshot() {
+            vncViewer.takeScreenshot();
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        function sendAutomationCommand(command) {
+            vncViewer.sendAutomationCommand(command);
+        }
+
+        function updateQuality(value) {
+            // Quality setting would be sent to server
+            console.log('Quality updated to:', value);
+        }
+
+        // Initialize
+        window.addEventListener('load', () => {
+            vncViewer.resizeCanvas();
+        });
+
+        window.addEventListener('resize', () => {
+            vncViewer.resizeCanvas();
+        });
+    </script>
+</body>
+</html>
